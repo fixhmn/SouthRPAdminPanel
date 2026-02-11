@@ -13,6 +13,7 @@ type Player = {
   name?: string;
   static_id?: number;
   discord_id?: number;
+  slots_current?: number;
   wl: boolean;
   ban: boolean;
   ban_until?: string | null;
@@ -252,6 +253,10 @@ export default function PlayerPage() {
             <div className="metaLine">
               <span className="metaKey">License</span>
               {renderCopyableValue(player.license, "license")}
+            </div>
+            <div className="metaLine">
+              <span className="metaKey">Слоты персонажей (текущие)</span>
+              {stringifyValue(player.slots_current)}
             </div>
             <div className="metaLine">
               <span className="metaKey">Whitelist</span>

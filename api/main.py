@@ -541,6 +541,7 @@ async def player_get(
     admin: AdminContext = Depends(require_permission("players.read")),
 ):
     pool = await get_pool()
+    current_slots = 1
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
@@ -567,6 +568,19 @@ async def player_get(
                 (citizenid,),
             )
             vehicles = await cur.fetchall()
+
+            player_license_tail = license_tail(p.get("license"))
+            if player_license_tail:
+                await cur.execute(
+                    "SELECT max_slots FROM player_slots WHERE SUBSTRING_INDEX(license, ':', -1)=%s LIMIT 1",
+                    (player_license_tail,),
+                )
+                slot_row = await cur.fetchone()
+                if slot_row and slot_row.get("max_slots") is not None:
+                    try:
+                        current_slots = int(slot_row.get("max_slots"))
+                    except Exception:
+                        current_slots = 1
 
     ci = _charinfo_to_dict(p.get("charinfo"))
     inv = []
@@ -598,6 +612,7 @@ async def player_get(
         "name": p.get("name"),
         "static_id": p.get("static_id"),
         "discord_id": p.get("discord_id"),
+        "slots_current": current_slots,
         "wl": bool(p.get("whitelisted") or 0),
         "ban": bool(p.get("ban") or 0),
         "ban_until": str(p.get("ban_until")) if p.get("ban_until") else None,
