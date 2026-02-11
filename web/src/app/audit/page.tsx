@@ -18,6 +18,20 @@ type AuditRes = {
   admin: string;
 };
 
+function parseMaybeJsonObject(v: unknown): Record<string, unknown> {
+  if (!v) return {};
+  if (typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  if (typeof v !== "string") return {};
+  try {
+    const parsed = JSON.parse(v);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function pretty(v: unknown): string {
   if (v === null || v === undefined) return "-";
   if (typeof v === "string") return v;
@@ -26,6 +40,90 @@ function pretty(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+function actionLabel(action: string): string {
+  const map: Record<string, string> = {
+    ADD_WL: "Добавил WL",
+    REMOVE_WL: "Убрал WL",
+    BULK_ADD_WL: "Массово добавил WL",
+    BAN_WL: "Выдал WL-бан",
+    UNBAN_WL: "Снял WL-бан",
+    SET_SLOTS: "Изменил слоты",
+    EDIT_PROFILE: "Изменил профиль",
+    DELETE_CHAR: "Удалил персонажа",
+    VEHICLE_EDIT: "Изменил машину",
+    ADMIN_CREATE: "Создал админа",
+    ADMIN_PATCH: "Изменил админа",
+    ADMIN_DEACTIVATE: "Деактивировал админа",
+    ROLE_REPLACE_PERMISSIONS: "Изменил permissions роли",
+    DISCORD_ASSIGN_ROLE: "Назначил роль Discord ID",
+  };
+  return map[action] || action;
+}
+
+function summarizeChange(row: AuditRow): string {
+  const target = parseMaybeJsonObject(row.target_json);
+  const payload = parseMaybeJsonObject(row.payload_json);
+  const action = row.action;
+
+  if (action === "BULK_ADD_WL") {
+    const updated = Array.isArray(payload.updated) ? payload.updated.join(", ") : "-";
+    const notFound = Array.isArray(payload.not_found) ? payload.not_found.join(", ") : "-";
+    return `WL добавлен static_id: [${updated}] | не найдены: [${notFound}]`;
+  }
+
+  if (action === "ADD_WL" || action === "REMOVE_WL" || action === "BAN_WL" || action === "UNBAN_WL") {
+    const citizenid = String(target.citizenid ?? "-");
+    const staticId = String(target.static_id ?? payload.static_id ?? "-");
+    const days = payload.days ?? payload.duration_days;
+    if (action === "BAN_WL") {
+      return `CitizenID: ${citizenid}, static_id: ${staticId}, дней: ${String(days ?? "-")}`;
+    }
+    return `CitizenID: ${citizenid}, static_id: ${staticId}`;
+  }
+
+  if (action === "SET_SLOTS") {
+    return `CitizenID: ${String(target.citizenid ?? "-")}, слоты: ${String(payload.slots ?? "-")} (${String(payload.action ?? "updated")})`;
+  }
+
+  if (action === "EDIT_PROFILE") {
+    const changed = Object.keys(payload);
+    return `CitizenID: ${String(target.citizenid ?? "-")}, поля: ${changed.join(", ") || "-"}`;
+  }
+
+  if (action === "DELETE_CHAR") {
+    return `Удален персонаж CitizenID: ${String(target.citizenid ?? "-")}`;
+  }
+
+  if (action === "VEHICLE_EDIT") {
+    const changed = Object.keys(payload);
+    return `Vehicle ID: ${String(target.vehicle_id ?? "-")}, поля: ${changed.join(", ") || "-"}`;
+  }
+
+  if (action === "ADMIN_CREATE") {
+    return `Admin ID: ${String(target.admin_id ?? "-")}, login: ${String(payload.login ?? "-")}, role: ${String(payload.role_name ?? "-")}`;
+  }
+
+  if (action === "ADMIN_PATCH") {
+    const changed = Object.keys(payload);
+    return `Admin ID: ${String(target.admin_id ?? "-")}, поля: ${changed.join(", ") || "-"}`;
+  }
+
+  if (action === "ADMIN_DEACTIVATE") {
+    return `Admin ID: ${String(target.admin_id ?? "-")} деактивирован`;
+  }
+
+  if (action === "ROLE_REPLACE_PERMISSIONS") {
+    const perms = Array.isArray(payload.permissions) ? payload.permissions.length : 0;
+    return `Role: ${String(target.role_name ?? "-")}, permissions: ${String(perms)}`;
+  }
+
+  if (action === "DISCORD_ASSIGN_ROLE") {
+    return `Discord ID: ${String(target.discord_id ?? "-")}, role: ${String(payload.role_name ?? "-")}, active: ${String(payload.is_active ?? "-")}`;
+  }
+
+  return "Детали в Target/Payload";
 }
 
 export default function AuditPage() {
@@ -153,8 +251,9 @@ export default function AuditPage() {
                   <col style={{ width: 190 }} />
                   <col style={{ width: 140 }} />
                   <col style={{ width: 180 }} />
-                  <col style={{ width: "calc((100% - 580px) / 2)" }} />
-                  <col style={{ width: "calc((100% - 580px) / 2)" }} />
+                  <col style={{ width: "calc((100% - 580px) / 3)" }} />
+                  <col style={{ width: "calc((100% - 580px) / 3)" }} />
+                  <col style={{ width: "calc((100% - 580px) / 3)" }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -162,6 +261,7 @@ export default function AuditPage() {
                     <th className="auditNowrap">Время</th>
                     <th className="auditNowrap">Админ</th>
                     <th className="auditNowrap">Действие</th>
+                    <th>Что изменено</th>
                     <th>Target</th>
                     <th>Payload</th>
                   </tr>
@@ -172,12 +272,19 @@ export default function AuditPage() {
                       <td className="auditNowrap">{row.id}</td>
                       <td className="auditNowrap">{row.ts}</td>
                       <td className="auditNowrap">{row.admin_tag}</td>
-                      <td className="auditNowrap">{row.action}</td>
+                      <td className="auditNowrap">{actionLabel(row.action)}</td>
+                      <td className="auditJson">{summarizeChange(row)}</td>
                       <td className="auditJson">
-                        <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{pretty(row.target_json)}</pre>
+                        <details>
+                          <summary className="small">Показать Target</summary>
+                          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{pretty(row.target_json)}</pre>
+                        </details>
                       </td>
                       <td className="auditJson">
-                        <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{pretty(row.payload_json)}</pre>
+                        <details>
+                          <summary className="small">Показать Payload</summary>
+                          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{pretty(row.payload_json)}</pre>
+                        </details>
                       </td>
                     </tr>
                   ))}
