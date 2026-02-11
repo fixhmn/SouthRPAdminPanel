@@ -42,10 +42,18 @@ if errorlevel 1 (
 
 echo [4/6] Installing WEB dependencies...
 cd /d "%WEB_DIR%"
-if not exist "node_modules" (
-  npm install
+where npm >nul 2>&1
+if errorlevel 1 (
+  echo npm is not installed or not in PATH.
+  pause
+  exit /b 1
+)
+set "npm_config_fund=false"
+set "npm_config_audit=false"
+if exist "package-lock.json" (
+  call npm ci --no-audit --no-fund
 ) else (
-  npm install
+  call npm install --no-audit --no-fund
 )
 if errorlevel 1 (
   echo Failed to install WEB dependencies.
@@ -54,7 +62,7 @@ if errorlevel 1 (
 )
 
 echo [5/6] Building WEB...
-npm run build
+call npm run build
 if errorlevel 1 (
   echo WEB build failed.
   pause
