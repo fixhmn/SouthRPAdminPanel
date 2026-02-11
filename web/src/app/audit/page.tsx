@@ -47,6 +47,7 @@ function actionLabel(action: string): string {
     ADD_WL: "Добавил WL",
     REMOVE_WL: "Убрал WL",
     BULK_ADD_WL: "Массово добавил WL",
+    ADD_WL_BULK: "Массово добавил WL",
     BAN_WL: "Выдал WL-бан",
     UNBAN_WL: "Снял WL-бан",
     SET_SLOTS: "Изменил слоты",
@@ -62,12 +63,30 @@ function actionLabel(action: string): string {
   return map[action] || action;
 }
 
+function formatMoscowTime(raw: string): string {
+  const normalized = raw.includes("T") ? raw : raw.replace(" ", "T");
+  const hasZone = /[zZ]|[+\-]\d{2}:?\d{2}$/.test(normalized);
+  const asUtc = hasZone ? normalized : `${normalized}Z`;
+  const dt = new Date(asUtc);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(dt);
+}
+
 function summarizeChange(row: AuditRow): string {
   const target = parseMaybeJsonObject(row.target_json);
   const payload = parseMaybeJsonObject(row.payload_json);
   const action = row.action;
 
-  if (action === "BULK_ADD_WL") {
+  if (action === "BULK_ADD_WL" || action === "ADD_WL_BULK") {
     const updated = Array.isArray(payload.updated) ? payload.updated.join(", ") : "-";
     const notFound = Array.isArray(payload.not_found) ? payload.not_found.join(", ") : "-";
     return `WL добавлен static_id: [${updated}] | не найдены: [${notFound}]`;
@@ -88,8 +107,19 @@ function summarizeChange(row: AuditRow): string {
   }
 
   if (action === "EDIT_PROFILE") {
-    const changed = Object.keys(payload);
-    return `CitizenID: ${String(target.citizenid ?? "-")}, поля: ${changed.join(", ") || "-"}`;
+    const changesRaw = payload.changes;
+    if (!changesRaw || typeof changesRaw !== "object" || Array.isArray(changesRaw)) {
+      return `CitizenID: ${String(target.citizenid ?? "-")}, изменения профиля`;
+    }
+    const changes = changesRaw as Record<string, unknown>;
+    const lines = Object.entries(changes).map(([field, val]) => {
+      if (!val || typeof val !== "object" || Array.isArray(val)) {
+        return `${field}: [изменено]`;
+      }
+      const obj = val as Record<string, unknown>;
+      return `${field}: ${String(obj.from ?? "-")} -> ${String(obj.to ?? "-")}`;
+    });
+    return `CitizenID: ${String(target.citizenid ?? "-")} | ${lines.join("; ") || "без деталей"}`;
   }
 
   if (action === "DELETE_CHAR") {
@@ -246,44 +276,29 @@ export default function AuditPage() {
             </div>
             <div className="tableWrap">
               <table className="table auditTable">
-                <colgroup>
-                  <col style={{ width: 70 }} />
-                  <col style={{ width: 190 }} />
-                  <col style={{ width: 140 }} />
-                  <col style={{ width: 180 }} />
-                  <col style={{ width: "calc((100% - 580px) / 3)" }} />
-                  <col style={{ width: "calc((100% - 580px) / 3)" }} />
-                  <col style={{ width: "calc((100% - 580px) / 3)" }} />
-                </colgroup>
                 <thead>
                   <tr>
                     <th className="auditNowrap">ID</th>
-                    <th className="auditNowrap">Время</th>
-                    <th className="auditNowrap">Админ</th>
+                    <th className="auditNowrap">Время (МСК)</th>
+                    <th>Админ</th>
                     <th className="auditNowrap">Действие</th>
                     <th>Что изменено</th>
-                    <th>Target</th>
-                    <th>Payload</th>
+                    <th>Детали</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((row) => (
                     <tr key={row.id}>
                       <td className="auditNowrap">{row.id}</td>
-                      <td className="auditNowrap">{row.ts}</td>
-                      <td className="auditNowrap">{row.admin_tag}</td>
+                      <td className="auditNowrap">{formatMoscowTime(row.ts)}</td>
+                      <td>{row.admin_tag}</td>
                       <td className="auditNowrap">{actionLabel(row.action)}</td>
                       <td className="auditJson">{summarizeChange(row)}</td>
                       <td className="auditJson">
                         <details>
-                          <summary className="small">Показать Target</summary>
-                          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{pretty(row.target_json)}</pre>
-                        </details>
-                      </td>
-                      <td className="auditJson">
-                        <details>
-                          <summary className="small">Показать Payload</summary>
-                          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{pretty(row.payload_json)}</pre>
+                          <summary className="small">Показать target/payload</summary>
+                          <pre style={{ margin: "6px 0 8px", whiteSpace: "pre-wrap" }}>{`target:\n${pretty(row.target_json)}`}</pre>
+                          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`payload:\n${pretty(row.payload_json)}`}</pre>
                         </details>
                       </td>
                     </tr>

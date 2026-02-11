@@ -644,6 +644,7 @@ async def player_patch_profile(
             raise HTTPException(400, "birthdate must be YYYY-MM-DD")
 
     pool = await get_pool()
+    changes_for_audit: dict[str, dict[str, object]] = {}
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute("SELECT charinfo FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
@@ -653,14 +654,24 @@ async def player_patch_profile(
 
             charinfo = _charinfo_to_dict(row.get("charinfo"))
             for key, value in updates.items():
-                charinfo[key] = value.strip() if isinstance(value, str) else value
+                old_value = charinfo.get(key)
+                new_value = value.strip() if isinstance(value, str) else value
+                charinfo[key] = new_value
+                if old_value != new_value:
+                    changes_for_audit[key] = {"from": old_value, "to": new_value}
 
             await cur.execute(
                 "UPDATE players SET charinfo=%s WHERE citizenid=%s",
                 (json.dumps(charinfo, ensure_ascii=False), citizenid),
             )
 
-    await _audit(pool, admin.login, "EDIT_PROFILE", {"citizenid": citizenid}, updates)
+    await _audit(
+        pool,
+        admin.login,
+        "EDIT_PROFILE",
+        {"citizenid": citizenid},
+        {"changes": changes_for_audit},
+    )
     return {"ok": True, "updated_fields": sorted(updates.keys())}
 
 

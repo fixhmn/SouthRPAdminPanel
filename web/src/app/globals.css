@@ -197,14 +197,15 @@ body {
 }
 
 .auditTable {
-  min-width: 1040px;
+  min-width: 0;
+  table-layout: fixed;
 }
 
 .auditTable th,
 .auditTable td {
   white-space: normal;
   word-break: normal;
-  overflow-wrap: normal;
+  overflow-wrap: anywhere;
   vertical-align: top;
 }
 
@@ -215,7 +216,7 @@ body {
 }
 
 .auditTable .auditJson {
-  min-width: 260px;
+  min-width: 0;
   white-space: normal;
   word-break: break-word;
   overflow-wrap: anywhere;
