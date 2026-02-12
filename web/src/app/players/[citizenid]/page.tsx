@@ -63,6 +63,13 @@ type GameActionTemplate = {
   is_active: number | boolean;
 };
 
+type ItemSuggestion = {
+  item: string;
+  label: string;
+  image?: string | null;
+  image_url?: string | null;
+};
+
 type OnlineStatus = {
   ok: boolean;
   online: boolean;
@@ -115,6 +122,8 @@ export default function PlayerPage() {
   const [showGamePanel, setShowGamePanel] = useState(false);
   const [onlineStatus, setOnlineStatus] = useState<OnlineStatus | null>(null);
   const [checkingOnline, setCheckingOnline] = useState(false);
+  const [itemSuggestions, setItemSuggestions] = useState<Record<string, ItemSuggestion[]>>({});
+  const [itemSuggestBusy, setItemSuggestBusy] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     setErr("");
@@ -264,6 +273,31 @@ export default function PlayerPage() {
         [key]: value,
       },
     }));
+  }
+
+  function getItemSuggestKey(templateId: number, variableKey: string): string {
+    return `${templateId}:${variableKey}`;
+  }
+
+  async function searchItemSuggestions(templateId: number, variableKey: string, q: string) {
+    const stateKey = getItemSuggestKey(templateId, variableKey);
+    const needle = q.trim();
+    if (!needle) {
+      setItemSuggestions((prev) => ({ ...prev, [stateKey]: [] }));
+      return;
+    }
+
+    setItemSuggestBusy((prev) => ({ ...prev, [stateKey]: true }));
+    try {
+      const res = await api<{ items: ItemSuggestion[] }>(
+        `/items/suggest?q=${encodeURIComponent(needle)}&limit=8`,
+      );
+      setItemSuggestions((prev) => ({ ...prev, [stateKey]: res.items || [] }));
+    } catch {
+      setItemSuggestions((prev) => ({ ...prev, [stateKey]: [] }));
+    } finally {
+      setItemSuggestBusy((prev) => ({ ...prev, [stateKey]: false }));
+    }
   }
 
   async function executeTemplate(template: GameActionTemplate) {
@@ -640,6 +674,63 @@ export default function PlayerPage() {
                               </label>
                               {AUTO_VARIABLE_KEYS.has(v.key) ? (
                                 <input className="input" value="Авто" disabled readOnly />
+                              ) : v.key === "item" ? (
+                                <div>
+                                  <input
+                                    className="input"
+                                    value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
+                                    onChange={(e) => {
+                                      const next = e.target.value;
+                                      setTemplateValue(tmpl.id, v.key, next);
+                                      void searchItemSuggestions(tmpl.id, v.key, next);
+                                    }}
+                                    placeholder="Введите label или key предмета"
+                                  />
+                                  {(itemSuggestions[getItemSuggestKey(tmpl.id, v.key)] || []).length > 0 && (
+                                    <div
+                                      style={{
+                                        border: "1px solid #2c3850",
+                                        borderRadius: 8,
+                                        marginTop: 6,
+                                        maxHeight: 180,
+                                        overflowY: "auto",
+                                        background: "#101726",
+                                      }}
+                                    >
+                                      {(itemSuggestions[getItemSuggestKey(tmpl.id, v.key)] || []).map((s) => (
+                                        <button
+                                          key={`${tmpl.id}-${v.key}-${s.item}`}
+                                          type="button"
+                                          onClick={() => {
+                                            setTemplateValue(tmpl.id, v.key, s.item);
+                                            setItemSuggestions((prev) => ({
+                                              ...prev,
+                                              [getItemSuggestKey(tmpl.id, v.key)]: [],
+                                            }));
+                                          }}
+                                          style={{
+                                            display: "block",
+                                            width: "100%",
+                                            textAlign: "left",
+                                            padding: "8px 10px",
+                                            border: "none",
+                                            borderBottom: "1px solid #1a2438",
+                                            background: "transparent",
+                                            color: "inherit",
+                                            cursor: "pointer",
+                                          }}
+                                        >
+                                          {s.label} <span className="muted">({s.item})</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {itemSuggestBusy[getItemSuggestKey(tmpl.id, v.key)] && (
+                                    <div className="small" style={{ marginTop: 4 }}>
+                                      Поиск...
+                                    </div>
+                                  )}
+                                </div>
                               ) : (
                                 <input
                                   className="input"

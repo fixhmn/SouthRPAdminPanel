@@ -23,7 +23,7 @@ from auth import (
     require_permission,
 )
 from db import get_pool
-from items_catalog import resolve_item_image, resolve_item_label
+from items_catalog import get_items_catalog, resolve_item_image, resolve_item_label
 from utils import license_tail
 
 UTC = timezone.utc
@@ -215,6 +215,10 @@ def _normalize_inventory_like(raw_value):
 
 
 def _normalize_item_key(v: str | None) -> str:
+    return (v or "").strip().lower()
+
+
+def _normalize_search_text(v: str | None) -> str:
     return (v or "").strip().lower()
 
 
@@ -1463,6 +1467,41 @@ async def item_check(
         "image": image,
         "image_url": _build_item_image_url(str(image) if image else None),
     }
+
+
+@app.get("/items/suggest")
+async def items_suggest(
+    q: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(10, ge=1, le=50),
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    del admin
+    needle = _normalize_search_text(q)
+    out: list[dict[str, Any]] = []
+    catalog = get_items_catalog()
+    if not catalog:
+        return {"items": out}
+
+    for item_key, meta in catalog.items():
+        key = _normalize_item_key(item_key)
+        label = str((meta or {}).get("label") or item_key)
+        image = (meta or {}).get("image")
+        haystack_key = _normalize_search_text(key)
+        haystack_label = _normalize_search_text(label)
+        if needle not in haystack_key and needle not in haystack_label:
+            continue
+        out.append(
+            {
+                "item": key,
+                "label": label,
+                "image": image,
+                "image_url": _build_item_image_url(str(image) if image else None),
+            }
+        )
+        if len(out) >= limit:
+            break
+
+    return {"items": out}
 
 
 @app.post("/players/{citizenid}/game-actions/debug-additem")
