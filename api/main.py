@@ -834,6 +834,66 @@ async def players_search(
     }
 
 
+@app.get("/players/online")
+async def players_online(
+    limit: int = Query(100, ge=1, le=500),
+    admin: AdminContext = Depends(require_permission("players.read")),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT p.citizenid, p.name, p.charinfo, p.license, s.static_id, s.discord_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                LIMIT 2000
+                """
+            )
+            rows = await cur.fetchall()
+
+    online_items: list[dict[str, Any]] = []
+    for row in rows:
+        player_ctx = {
+            "citizenid": row.get("citizenid"),
+            "static_id": row.get("static_id"),
+            "license": row.get("license"),
+            "discord_id": row.get("discord_id"),
+            "name": row.get("name"),
+        }
+
+        try:
+            status = _post_bridge_status({"player": player_ctx})
+        except HTTPException:
+            continue
+
+        source_id = status.get("source")
+        if not bool(status.get("online")) or source_id is None:
+            continue
+
+        ci = _charinfo_to_dict(row.get("charinfo"))
+        online_items.append(
+            {
+                "citizenid": row.get("citizenid"),
+                "name": row.get("name"),
+                "static_id": row.get("static_id"),
+                "discord_id": row.get("discord_id"),
+                "firstname": ci.get("firstname"),
+                "lastname": ci.get("lastname"),
+                "phone": ci.get("phone"),
+                "source": source_id,
+            }
+        )
+        if len(online_items) >= limit:
+            break
+
+    return {
+        "count": len(online_items),
+        "items": online_items,
+        "admin": {"login": admin.login, "role": admin.role_name},
+    }
+
+
 @app.get("/players/{citizenid}")
 async def player_get(
     citizenid: str,

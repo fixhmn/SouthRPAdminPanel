@@ -85,6 +85,11 @@ export default function Players() {
             <Link className="btn secondary" href="/">
               Главная
             </Link>
+            {can(me, "players.read") && (
+              <Link className="btn secondary" href="/players/online">
+                Онлайн
+              </Link>
+            )}
             {can(me, "vehicles.read") && (
               <Link className="btn secondary" href="/vehicles">
                 Поиск машин

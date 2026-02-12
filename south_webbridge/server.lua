@@ -1,5 +1,6 @@
 local RESOURCE_NAME = GetCurrentResourceName()
 local TOKEN_CONVAR = "south_webbridge_token"
+local onlinePlayers = {}
 
 local function getBridgeToken()
     return tostring(GetConvar(TOKEN_CONVAR, ""))
@@ -8,6 +9,114 @@ end
 local function jsonResponse(res, status, payload)
     res.writeHead(status, { ["Content-Type"] = "application/json; charset=utf-8" })
     res.send(json.encode(payload))
+end
+
+local function extractDiscordId(src)
+    for _, ident in ipairs(GetPlayerIdentifiers(src)) do
+        if type(ident) == "string" and ident:sub(1, 8) == "discord:" then
+            return ident:sub(9)
+        end
+    end
+    return nil
+end
+
+local function resolveStaticIdBySource(src)
+    local staticId = nil
+    local okA, valA = pcall(function()
+        return exports["south_staticid"] and exports["south_staticid"]:getStaticIdFromServerId(src)
+    end)
+    if okA and valA then
+        staticId = valA
+    end
+    if not staticId then
+        local okB, valB = pcall(function()
+            return exports["south_staticid"] and exports["south_staticid"]:getStaticFromPlayerId(src)
+        end)
+        if okB and valB then
+            staticId = valB
+        end
+    end
+    if not staticId then
+        local okC, valC = pcall(function()
+            return exports["south_staticid"] and exports["south_staticid"]:getStaticIdFromPlayer(src)
+        end)
+        if okC and valC then
+            staticId = valC
+        end
+    end
+    return staticId
+end
+
+local function buildOnlinePlayerSnapshot(src)
+    if not src or not GetPlayerName(src) then
+        return nil
+    end
+
+    local item = {
+        source = src,
+        name = GetPlayerName(src),
+        citizenid = nil,
+        static_id = resolveStaticIdBySource(src),
+        discord_id = extractDiscordId(src),
+        firstname = nil,
+        lastname = nil,
+        phone = nil,
+    }
+
+    local okPlayer, player = pcall(function()
+        return exports.qbx_core and exports.qbx_core:GetPlayer(src) or nil
+    end)
+    if okPlayer and player and player.PlayerData then
+        local pd = player.PlayerData
+        item.citizenid = pd.citizenid
+        item.name = (pd.name and tostring(pd.name)) or item.name
+        if pd.charinfo then
+            item.firstname = pd.charinfo.firstname
+            item.lastname = pd.charinfo.lastname
+            item.phone = pd.charinfo.phone
+            if (not item.name or item.name == "") and (item.firstname or item.lastname) then
+                item.name = ((item.firstname or "") .. " " .. (item.lastname or "")):gsub("^%s+", ""):gsub("%s+$", "")
+            end
+        end
+    end
+
+    return item
+end
+
+local function refreshOnlinePlayer(src)
+    local row = buildOnlinePlayerSnapshot(src)
+    if row then
+        onlinePlayers[src] = row
+    end
+end
+
+local function removeOnlinePlayer(src)
+    onlinePlayers[src] = nil
+end
+
+local function rebuildOnlinePlayers()
+    onlinePlayers = {}
+    for _, srcStr in ipairs(GetPlayers()) do
+        local src = tonumber(srcStr)
+        if src then
+            refreshOnlinePlayer(src)
+        end
+    end
+end
+
+local function getOnlinePlayersList()
+    local out = {}
+    for src, row in pairs(onlinePlayers) do
+        if GetPlayerName(src) then
+            out[#out + 1] = row
+        else
+            onlinePlayers[src] = nil
+        end
+    end
+    table.sort(out, function(a, b)
+        return tonumber(a.source or 0) < tonumber(b.source or 0)
+    end)
+    return out
 end
 
 local function normalizeArgs(args)
@@ -295,12 +404,48 @@ if getBridgeToken() == "" then
     print(("[^1%s^7] WARNING: %s is empty. Bridge requests will be rejected."):format(RESOURCE_NAME, TOKEN_CONVAR))
 end
 
+AddEventHandler("playerJoining", function()
+    local src = source
+    if src then
+        refreshOnlinePlayer(src)
+    end
+end)
+
+AddEventHandler("playerDropped", function()
+    local src = source
+    if src then
+        removeOnlinePlayer(src)
+    end
+end)
+
+AddEventHandler("QBCore:Server:OnPlayerLoaded", function(playerObj)
+    local src = nil
+    if type(playerObj) == "number" then
+        src = playerObj
+    elseif type(playerObj) == "table" and playerObj.PlayerData then
+        src = playerObj.PlayerData.source or playerObj.source
+    end
+    if src then
+        refreshOnlinePlayer(src)
+    end
+end)
+
+CreateThread(function()
+    Wait(1000)
+    rebuildOnlinePlayers()
+    while true do
+        Wait(15000)
+        rebuildOnlinePlayers()
+    end
+end)
+
 SetHttpHandler(function(req, res)
     local path = tostring(req.path or "")
     local isExecute = (path == "/south_webbridge/execute" or path == "/execute")
     local isStatus = (path == "/south_webbridge/status" or path == "/status")
+    local isOnlineList = (path == "/south_webbridge/online-list" or path == "/online-list")
 
-    if (not isExecute) and (not isStatus) then
+    if (not isExecute) and (not isStatus) and (not isOnlineList) then
         return jsonResponse(res, 404, { ok = false, error = "not_found" })
     end
 
@@ -342,6 +487,10 @@ SetHttpHandler(function(req, res)
             return jsonResponse(res, 200, { ok = true, online = false, source = nil })
         end
 
+        if isOnlineList then
+            return jsonResponse(res, 200, { ok = true, items = getOnlinePlayersList() })
+        end
+
         local okExec, message, result = executePayload(payload)
         print(("[^3%s^7] action=%s ok=%s message=%s"):format(
             RESOURCE_NAME,
@@ -364,4 +513,4 @@ SetHttpHandler(function(req, res)
     end)
 end)
 
-print(("[^2%s^7] Loaded. Endpoints: /south_webbridge/execute, /south_webbridge/status"):format(RESOURCE_NAME))
+print(("[^2%s^7] Loaded. Endpoints: /south_webbridge/execute, /south_webbridge/status, /south_webbridge/online-list"):format(RESOURCE_NAME))
