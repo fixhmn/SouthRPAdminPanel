@@ -162,6 +162,10 @@ class ItemDebugBody(BaseModel):
     amount: int = Field(default=1, ge=1, le=1000000)
 
 
+class KickBody(BaseModel):
+    reason: str | None = Field(default=None, max_length=256)
+
+
 def _charinfo_to_dict(charinfo):
     if isinstance(charinfo, str):
         try:
@@ -391,6 +395,79 @@ def _post_bridge_status(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(502, f"Bridge HTTP {e.code}: {detail or 'error'}")
     except Exception as e:
         raise HTTPException(502, f"Bridge unavailable: {e}")
+
+
+async def _get_player_bridge_context(pool, citizenid: str) -> dict[str, Any]:
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT p.citizenid, p.license, p.name, s.static_id, s.discord_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE p.citizenid = %s
+                LIMIT 1
+                """,
+                (citizenid,),
+            )
+            p = await cur.fetchone()
+            if not p:
+                raise HTTPException(404, "Player not found")
+
+    return {
+        "citizenid": p.get("citizenid"),
+        "static_id": p.get("static_id"),
+        "license": p.get("license"),
+        "discord_id": p.get("discord_id"),
+        "name": p.get("name"),
+    }
+
+
+def _kick_reason(raw_reason: str | None, fallback: str) -> str:
+    reason = (raw_reason or "").strip()
+    return reason[:256] if reason else fallback
+
+
+async def _drop_player_if_online(pool, citizenid: str, reason: str, admin: AdminContext) -> dict[str, Any]:
+    player_ctx = await _get_player_bridge_context(pool, citizenid)
+    try:
+        status = _post_bridge_status({"player": player_ctx})
+    except HTTPException as e:
+        return {
+            "attempted": False,
+            "dropped": False,
+            "online": None,
+            "source": None,
+            "error": str(e.detail),
+        }
+
+    source_id = status.get("source")
+    if not bool(status.get("online")) or source_id is None:
+        return {"attempted": False, "dropped": False, "online": False, "source": None}
+
+    payload = {
+        "template": {
+            "id": 0,
+            "name": "drop_player",
+            "action_type": "drop_player",
+            "action_name": "DropPlayer",
+        },
+        "player": {**player_ctx, "source": source_id, "targetId": source_id, "target_id": source_id},
+        "values": {"targetId": source_id, "reason": reason},
+        "args": [source_id, reason],
+        "requested_by": {"admin_id": admin.admin_id, "login": admin.login},
+    }
+    try:
+        bridge = _post_bridge_execute(payload)
+        return {"attempted": True, "dropped": True, "online": True, "source": source_id, "bridge": bridge}
+    except HTTPException as e:
+        return {
+            "attempted": True,
+            "dropped": False,
+            "online": True,
+            "source": source_id,
+            "error": str(e.detail),
+        }
 
 
 async def _audit(pool, admin_tag: str, action: str, target: dict, payload: dict | None = None):
@@ -965,6 +1042,38 @@ async def addwl_by_static_ids(
     return {"ok": True, "updated": updated, "not_found": not_found}
 
 
+@app.post("/wl/remove-by-static-ids")
+async def removewl_by_static_ids(
+    body: WlBulkBody,
+    admin: AdminContext = Depends(require_permission("players.manage_wl")),
+):
+    static_ids = sorted(set(int(x) for x in body.static_ids if int(x) > 0))
+    if not static_ids:
+        raise HTTPException(400, "static_ids is empty")
+
+    pool = await get_pool()
+    updated: list[int] = []
+    not_found: list[int] = []
+
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            for sid in static_ids:
+                await cur.execute("UPDATE static_ids SET whitelisted = 0 WHERE static_id = %s", (sid,))
+                if cur.rowcount > 0:
+                    updated.append(sid)
+                else:
+                    not_found.append(sid)
+
+    await _audit(
+        pool,
+        admin.login,
+        "REMOVE_WL_BULK",
+        {"count": len(static_ids)},
+        {"updated": updated, "not_found": not_found},
+    )
+    return {"ok": True, "updated": updated, "not_found": not_found}
+
+
 @app.post("/players/{citizenid}/actions/removewl")
 async def removewl(
     citizenid: str,
@@ -982,8 +1091,20 @@ async def removewl(
                 raise HTTPException(404, "static_id not found")
             await cur.execute("UPDATE static_ids SET whitelisted=0 WHERE static_id=%s", (sid,))
 
-    await _audit(pool, admin.login, "REMOVE_WL", {"citizenid": citizenid, "static_id": sid})
-    return {"ok": True, "static_id": sid}
+    drop_result = await _drop_player_if_online(
+        pool,
+        citizenid,
+        _kick_reason(None, "You have been removed from whitelist."),
+        admin,
+    )
+    await _audit(
+        pool,
+        admin.login,
+        "REMOVE_WL",
+        {"citizenid": citizenid, "static_id": sid},
+        {"drop": drop_result},
+    )
+    return {"ok": True, "static_id": sid, "drop": drop_result}
 
 
 @app.post("/players/{citizenid}/actions/banwl")
@@ -1009,14 +1130,20 @@ async def banwl(
                 (ban_until, sid),
             )
 
+    drop_result = await _drop_player_if_online(
+        pool,
+        citizenid,
+        _kick_reason(None, f"You have been banned from whitelist for {days} day(s)."),
+        admin,
+    )
     await _audit(
         pool,
         admin.login,
         "BAN_WL",
         {"citizenid": citizenid, "static_id": sid},
-        {"days": days},
+        {"days": days, "drop": drop_result},
     )
-    return {"ok": True, "static_id": sid, "days": days}
+    return {"ok": True, "static_id": sid, "days": days, "drop": drop_result}
 
 
 @app.post("/players/{citizenid}/actions/unbanwl")
@@ -1085,6 +1212,28 @@ async def setslots(
         {"slots": slots, "action": action},
     )
     return {"ok": True, "action": action, "slots": slots}
+
+
+@app.post("/players/{citizenid}/actions/kick")
+async def kick_player(
+    citizenid: str,
+    body: KickBody,
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    pool = await get_pool()
+    reason = _kick_reason(body.reason, "Kicked by administrator.")
+    drop_result = await _drop_player_if_online(pool, citizenid, reason, admin)
+    if not drop_result.get("dropped"):
+        raise HTTPException(400, "Player is offline. Kick is unavailable.")
+
+    await _audit(
+        pool,
+        admin.login,
+        "KICK_PLAYER",
+        {"citizenid": citizenid},
+        {"reason": reason, "drop": drop_result},
+    )
+    return {"ok": True, "reason": reason, "drop": drop_result}
 
 
 @app.delete("/players/{citizenid}")

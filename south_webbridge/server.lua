@@ -218,6 +218,26 @@ local function executeQbxSetGang(payload)
     return true, "gang updated", { source = targetSource, gang = tostring(gang), grade = tonumber(grade) or 0 }
 end
 
+local function executeDropPlayer(payload)
+    local values = payload.values or {}
+    local reason = tostring(values.reason or values.message or "Kicked by administrator.")
+    local targetSource = resolveTargetSource(payload)
+    if not targetSource then
+        return false, "target source is not resolved (player should be online)", nil
+    end
+    if not GetPlayerName(targetSource) then
+        return false, "player is offline", nil
+    end
+
+    local okDrop, errDrop = pcall(function()
+        DropPlayer(targetSource, reason)
+    end)
+    if not okDrop then
+        return false, tostring(errDrop), nil
+    end
+    return true, "player dropped", { source = targetSource, reason = reason }
+end
+
 local function executePayload(payload)
     local template = payload.template or {}
     local actionType = template.action_type
@@ -263,6 +283,9 @@ local function executePayload(payload)
     end
     if actionType == "qbx_set_gang" then
         return executeQbxSetGang(payload)
+    end
+    if actionType == "drop_player" then
+        return executeDropPlayer(payload)
     end
 
     return false, ("unsupported action_type: %s"):format(tostring(actionType)), nil

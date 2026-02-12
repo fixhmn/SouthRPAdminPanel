@@ -21,6 +21,7 @@ export default function Players() {
   const [field, setField] = useState("fullname");
   const [q, setQ] = useState("");
   const [data, setData] = useState<SearchRes | null>(null);
+  const [wlBulkMode, setWlBulkMode] = useState<"add" | "remove">("add");
   const [wlBulkText, setWlBulkText] = useState("");
   const [wlBulkResult, setWlBulkResult] = useState<{ updated: number[]; not_found: number[] } | null>(null);
   const [me, setMe] = useState<AdminMe | null>(null);
@@ -52,7 +53,8 @@ export default function Players() {
         setErr("Укажи хотя бы один static_id.");
         return;
       }
-      const res = await api<{ ok: boolean; updated: number[]; not_found: number[] }>("/wl/add-by-static-ids", {
+      const endpoint = wlBulkMode === "add" ? "/wl/add-by-static-ids" : "/wl/remove-by-static-ids";
+      const res = await api<{ ok: boolean; updated: number[]; not_found: number[] }>(endpoint, {
         method: "POST",
         body: JSON.stringify({ static_ids: ids }),
       });
@@ -139,9 +141,20 @@ export default function Players() {
 
       {can(me, "players.manage_wl") && (
         <section className="card" style={{ marginTop: 14 }}>
-          <h3 style={{ marginTop: 0 }}>Add WL по static_id (массово)</h3>
+          <h3 style={{ marginTop: 0 }}>Массовый WL по static_id</h3>
           <div className="small" style={{ marginBottom: 8 }}>
             Вставь список ID через пробел, запятую или новую строку.
+          </div>
+          <div className="row" style={{ marginBottom: 8 }}>
+            <select
+              className="input"
+              value={wlBulkMode}
+              onChange={(e) => setWlBulkMode(e.target.value as "add" | "remove")}
+              style={{ maxWidth: 220 }}
+            >
+              <option value="add">Добавить в WL</option>
+              <option value="remove">Убрать из WL</option>
+            </select>
           </div>
           <textarea
             className="input"
@@ -152,7 +165,7 @@ export default function Players() {
           />
           <div className="row" style={{ marginTop: 8 }}>
             <button className="btn" onClick={runBulkWl}>
-              Добавить в WL
+              {wlBulkMode === "add" ? "Добавить в WL" : "Убрать из WL"}
             </button>
           </div>
           {wlBulkResult && (

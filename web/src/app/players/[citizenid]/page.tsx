@@ -126,6 +126,7 @@ export default function PlayerPage() {
   const [busy, setBusy] = useState(false);
   const [banDays, setBanDays] = useState(1);
   const [slots, setSlots] = useState(3);
+  const [kickReason, setKickReason] = useState("");
   const [copiedField, setCopiedField] = useState("");
   const [editFirstname, setEditFirstname] = useState("");
   const [editLastname, setEditLastname] = useState("");
@@ -213,6 +214,23 @@ export default function PlayerPage() {
     try {
       await api(`/players/${cid}`, { method: "DELETE" });
       window.location.href = "/players";
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function kickPlayerNow() {
+    setBusy(true);
+    setErr("");
+    try {
+      await api(`/players/${cid}/actions/kick`, {
+        method: "POST",
+        body: JSON.stringify({ reason: kickReason.trim() || undefined }),
+      });
+      setKickReason("");
+      await checkOnlineStatus(true);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -610,6 +628,27 @@ export default function PlayerPage() {
                   onClick={() => act(`/players/${cid}/actions/setslots?slots=${slots}`)}
                 >
                   Установить слоты
+                </button>
+              </>
+            )}
+
+            {can(me, "players.game_interact") && (
+              <>
+                <input
+                  className="input"
+                  value={kickReason}
+                  onChange={(e) => setKickReason(e.target.value)}
+                  placeholder="Причина кика (опционально)"
+                  style={{ minWidth: 240 }}
+                  maxLength={256}
+                />
+                <button
+                  disabled={busy || !onlineStatus?.online}
+                  className="btn danger"
+                  onClick={kickPlayerNow}
+                  title={onlineStatus?.online ? "" : "Игрок оффлайн"}
+                >
+                  Кикнуть
                 </button>
               </>
             )}
