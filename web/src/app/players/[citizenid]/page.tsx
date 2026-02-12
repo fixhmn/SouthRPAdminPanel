@@ -44,6 +44,32 @@ type InventoryItem = {
   amount?: number;
 };
 
+type GameActionVariable = {
+  key: string;
+  label?: string;
+  value_type: "string" | "number" | "boolean";
+  required?: boolean;
+  default_value?: string | null;
+};
+
+type GameActionTemplate = {
+  id: number;
+  name: string;
+  description?: string | null;
+  action_type: "export" | "server_event" | "qbx_set_job";
+  resource_name?: string | null;
+  action_name: string;
+  variables: GameActionVariable[];
+  is_active: number | boolean;
+};
+
+type OnlineStatus = {
+  ok: boolean;
+  online: boolean;
+  source?: number | null;
+  player_name?: string | null;
+};
+
 function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return "-";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
@@ -80,6 +106,13 @@ export default function PlayerPage() {
   const [editPhone, setEditPhone] = useState("");
   const [editBirthdate, setEditBirthdate] = useState("");
   const [editNationality, setEditNationality] = useState("");
+  const [gameActions, setGameActions] = useState<GameActionTemplate[]>([]);
+  const [gameActionValues, setGameActionValues] = useState<Record<number, Record<string, string>>>({});
+  const [gameActionBusy, setGameActionBusy] = useState<number | null>(null);
+  const [gameActionStatus, setGameActionStatus] = useState<string>("");
+  const [showGamePanel, setShowGamePanel] = useState(false);
+  const [onlineStatus, setOnlineStatus] = useState<OnlineStatus | null>(null);
+  const [checkingOnline, setCheckingOnline] = useState(false);
 
   const load = useCallback(async () => {
     setErr("");
@@ -87,6 +120,27 @@ export default function PlayerPage() {
       const [current, res] = await Promise.all([fetchMe(), api<Player>(`/players/${cid}`)]);
       setMe(current);
       setPlayer(res);
+
+      if (can(current, "players.game_interact")) {
+        const t = await api<{ items: GameActionTemplate[] }>("/game-actions/templates?active_only=true");
+        const templates = (t.items || []).filter((x) => Boolean(x.is_active));
+        setGameActions(templates);
+        setGameActionValues((prev) => {
+          const next = { ...prev };
+          for (const tmpl of templates) {
+            if (!next[tmpl.id]) {
+              const one: Record<string, string> = {};
+              for (const v of tmpl.variables || []) {
+                one[v.key] = v.default_value ? String(v.default_value) : "";
+              }
+              next[tmpl.id] = one;
+            }
+          }
+          return next;
+        });
+      } else {
+        setGameActions([]);
+      }
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -200,6 +254,57 @@ export default function PlayerPage() {
     );
   }
 
+  function setTemplateValue(templateId: number, key: string, value: string) {
+    setGameActionValues((prev) => ({
+      ...prev,
+      [templateId]: {
+        ...(prev[templateId] || {}),
+        [key]: value,
+      },
+    }));
+  }
+
+  async function executeTemplate(template: GameActionTemplate) {
+    if (!onlineStatus?.online) {
+      setErr("Игрок оффлайн. Внутриигровое взаимодействие недоступно.");
+      return;
+    }
+    setGameActionBusy(template.id);
+    setGameActionStatus("");
+    setErr("");
+    try {
+      const values = gameActionValues[template.id] || {};
+      await api(`/players/${cid}/game-actions/execute`, {
+        method: "POST",
+        body: JSON.stringify({
+          template_id: template.id,
+          values,
+        }),
+      });
+      setGameActionStatus(`Шаблон "${template.name}" выполнен.`);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGameActionBusy(null);
+    }
+  }
+
+  async function checkOnlineStatus() {
+    setCheckingOnline(true);
+    setErr("");
+    try {
+      const st = await api<OnlineStatus>(`/players/${cid}/online-status`);
+      setOnlineStatus(st);
+      if (!st.online) {
+        setShowGamePanel(false);
+      }
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCheckingOnline(false);
+    }
+  }
+
   if (err && !player) {
     return (
       <main className="container">
@@ -271,6 +376,20 @@ export default function PlayerPage() {
 
         <section className="card">
           <h3>Действия</h3>
+          {can(me, "players.game_interact") && (
+            <div className="row" style={{ flexWrap: "wrap", marginTop: 8, marginBottom: 8 }}>
+              <button className="btn secondary" disabled={checkingOnline} onClick={checkOnlineStatus}>
+                {checkingOnline ? "Проверка..." : "Проверить онлайн"}
+              </button>
+              <div className="small">
+                {onlineStatus === null
+                  ? "Статус: не проверен"
+                  : onlineStatus.online
+                    ? `Статус: онлайн (ID: ${String(onlineStatus.source ?? "-")})`
+                    : "Статус: оффлайн"}
+              </div>
+            </div>
+          )}
           <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
             {can(me, "players.manage_wl") && (
               <>
@@ -467,6 +586,83 @@ export default function PlayerPage() {
           )}
         </section>
       </div>
+
+      {can(me, "players.game_interact") && (
+        <section className="card" style={{ marginTop: 12 }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ margin: 0 }}>Внутриигровое взаимодействие</h3>
+            <button
+              className="btn secondary"
+              onClick={() => setShowGamePanel((s) => !s)}
+              disabled={!onlineStatus?.online}
+            >
+              {showGamePanel ? "Скрыть" : "Открыть"}
+            </button>
+          </div>
+          {!onlineStatus?.online && (
+            <div className="small" style={{ marginTop: 8 }}>
+              Раздел доступен только когда игрок онлайн. Нажми «Проверить онлайн».
+            </div>
+          )}
+
+          {showGamePanel && onlineStatus?.online && (
+            <div style={{ marginTop: 10 }}>
+              {gameActionStatus && <div className="small">{gameActionStatus}</div>}
+              {gameActions.length === 0 ? (
+                <p className="muted">Активные шаблоны не настроены.</p>
+              ) : (
+                <div className="grid">
+                  {gameActions.map((tmpl) => (
+                    <article key={tmpl.id} className="metaLine">
+                      <div>
+                        <strong>{tmpl.name}</strong>
+                        <div className="small">{tmpl.description || "Без описания"}</div>
+                        <div className="small">
+                          {tmpl.action_type}
+                          {tmpl.resource_name ? ` | ${tmpl.resource_name}` : ""} | {tmpl.action_name}
+                        </div>
+                      </div>
+
+                      {(tmpl.variables || []).length > 0 && (
+                        <div className="metaGrid" style={{ marginTop: 8 }}>
+                          {tmpl.variables.map((v) => (
+                            <div key={`${tmpl.id}-${v.key}`}>
+                              <label className="metaKey">
+                                {v.label || v.key}
+                                {v.required ? " *" : ""}
+                              </label>
+                              <input
+                                className="input"
+                                value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
+                                onChange={(e) => setTemplateValue(tmpl.id, v.key, e.target.value)}
+                                placeholder={
+                                  v.default_value
+                                    ? `default: ${String(v.default_value)}`
+                                    : "Пусто = взять из профиля игрока"
+                                }
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ marginTop: 8 }}>
+                        <button
+                          className="btn"
+                          disabled={gameActionBusy !== null}
+                          onClick={() => executeTemplate(tmpl)}
+                        >
+                          {gameActionBusy === tmpl.id ? "Выполнение..." : "Выполнить"}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       <section className="card" style={{ marginTop: 12 }}>
         <h3>Инвентарь (первые 50)</h3>

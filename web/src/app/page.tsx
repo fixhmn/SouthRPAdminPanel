@@ -176,6 +176,18 @@ function HomeContent() {
                 </div>
               </article>
             )}
+
+            {can(me, "actions.manage_templates") && (
+              <article className="card">
+                <h3 style={{ marginTop: 0 }}>Внутриигровые шаблоны</h3>
+                <p className="small">Настройка кнопок действий для взаимодействия с сервером из карточки игрока.</p>
+                <div style={{ marginTop: 10 }}>
+                  <Link className="btn" href="/game-actions">
+                    Открыть
+                  </Link>
+                </div>
+              </article>
+            )}
           </div>
         </section>
       </main>

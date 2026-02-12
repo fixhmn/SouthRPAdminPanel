@@ -93,6 +93,11 @@ export default function Players() {
                 Журнал аудита
               </Link>
             )}
+            {can(me, "actions.manage_templates") && (
+              <Link className="btn secondary" href="/game-actions">
+                Шаблоны
+              </Link>
+            )}
             <button className="btn secondary" onClick={logout}>
               Выйти
             </button>

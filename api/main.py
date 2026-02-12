@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import aiomysql
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
@@ -44,6 +45,8 @@ DISCORD_ROLE_MODERATOR = int(os.getenv("DISCORD_ROLE_MODERATOR", "89323082032680
 DISCORD_ROLE_ADMINISTRATOR = int(os.getenv("DISCORD_ROLE_ADMINISTRATOR", "861906053519900692"))
 
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:3000").rstrip("/")
+BRIDGE_URL = os.getenv("BRIDGE_URL", "http://127.0.0.1:30120/south_webbridge/execute").strip()
+BRIDGE_TOKEN = os.getenv("BRIDGE_TOKEN", "").strip()
 
 _oauth_login_codes: dict[str, tuple[str, float]] = {}
 
@@ -117,6 +120,39 @@ class VehiclePatchBody(BaseModel):
     lock: int | None = None
 
 
+class GameActionVariableBody(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    label: str | None = Field(default=None, max_length=128)
+    value_type: str = Field(default="string", pattern="^(string|number|boolean)$")
+    required: bool = True
+    default_value: str | None = Field(default=None, max_length=256)
+
+
+class GameActionTemplateCreateBody(BaseModel):
+    name: str = Field(min_length=2, max_length=96)
+    description: str | None = Field(default=None, max_length=512)
+    action_type: str = Field(pattern="^(export|server_event|qbx_set_job)$")
+    resource_name: str | None = Field(default=None, max_length=64)
+    action_name: str = Field(min_length=1, max_length=128)
+    variables: list[GameActionVariableBody] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class GameActionTemplatePatchBody(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=96)
+    description: str | None = Field(default=None, max_length=512)
+    action_type: str | None = Field(default=None, pattern="^(export|server_event|qbx_set_job)$")
+    resource_name: str | None = Field(default=None, max_length=64)
+    action_name: str | None = Field(default=None, min_length=1, max_length=128)
+    variables: list[GameActionVariableBody] | None = None
+    is_active: bool | None = None
+
+
+class GameActionExecuteBody(BaseModel):
+    template_id: int = Field(ge=1)
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
 def _charinfo_to_dict(charinfo):
     if isinstance(charinfo, str):
         try:
@@ -173,6 +209,129 @@ def _normalize_inventory_like(raw_value):
     return out
 
 
+def _clean_template_variables(variables: list[GameActionVariableBody] | None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for var in variables or []:
+        key = var.key.strip()
+        if not key:
+            continue
+        if key in seen:
+            raise HTTPException(400, f"Duplicate variable key: {key}")
+        seen.add(key)
+        out.append(
+            {
+                "key": key,
+                "label": (var.label or key).strip()[:128],
+                "value_type": var.value_type,
+                "required": bool(var.required),
+                "default_value": var.default_value,
+            }
+        )
+    return out
+
+
+def _convert_variable_value(raw_value: Any, value_type: str) -> Any:
+    if value_type == "number":
+        if raw_value is None or raw_value == "":
+            return None
+        try:
+            if isinstance(raw_value, str) and "." in raw_value:
+                return float(raw_value)
+            return int(raw_value)
+        except Exception:
+            raise HTTPException(400, f"Expected number, got: {raw_value}")
+    if value_type == "boolean":
+        if isinstance(raw_value, bool):
+            return raw_value
+        sval = str(raw_value).strip().lower()
+        if sval in {"1", "true", "yes", "on"}:
+            return True
+        if sval in {"0", "false", "no", "off"}:
+            return False
+        raise HTTPException(400, f"Expected boolean, got: {raw_value}")
+    return "" if raw_value is None else str(raw_value)
+
+
+async def _ensure_game_actions_table(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_game_action_templates (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(96) NOT NULL,
+                    description TEXT NULL,
+                    action_type VARCHAR(32) NOT NULL,
+                    resource_name VARCHAR(64) NULL,
+                    action_name VARCHAR(128) NOT NULL,
+                    variables_json JSON NOT NULL,
+                    is_active TINYINT(1) NOT NULL DEFAULT 1,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+
+
+def _post_bridge_execute(payload: dict[str, Any]) -> dict[str, Any]:
+    if not BRIDGE_URL:
+        raise HTTPException(500, "BRIDGE_URL is not configured")
+    if not BRIDGE_TOKEN:
+        raise HTTPException(500, "BRIDGE_TOKEN is not configured")
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(BRIDGE_URL, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    req.add_header("X-Bridge-Token", BRIDGE_TOKEN)
+    req.add_header("User-Agent", "SouthRPAdminBridge/1.0")
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("utf-8")
+        return json.loads(raw) if raw else {"ok": True}
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail = ""
+        raise HTTPException(502, f"Bridge HTTP {e.code}: {detail or 'error'}")
+    except Exception as e:
+        raise HTTPException(502, f"Bridge unavailable: {e}")
+
+
+def _bridge_url_with_path(path_suffix: str) -> str:
+    base = BRIDGE_URL.rsplit("/", 1)[0]
+    return f"{base}/{path_suffix.lstrip('/')}"
+
+
+def _post_bridge_status(payload: dict[str, Any]) -> dict[str, Any]:
+    if not BRIDGE_URL:
+        raise HTTPException(500, "BRIDGE_URL is not configured")
+    if not BRIDGE_TOKEN:
+        raise HTTPException(500, "BRIDGE_TOKEN is not configured")
+
+    status_url = _bridge_url_with_path("status")
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(status_url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    req.add_header("X-Bridge-Token", BRIDGE_TOKEN)
+    req.add_header("User-Agent", "SouthRPAdminBridge/1.0")
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("utf-8")
+        return json.loads(raw) if raw else {"ok": False, "online": False}
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail = ""
+        raise HTTPException(502, f"Bridge HTTP {e.code}: {detail or 'error'}")
+    except Exception as e:
+        raise HTTPException(502, f"Bridge unavailable: {e}")
+
+
 async def _audit(pool, admin_tag: str, action: str, target: dict, payload: dict | None = None):
     payload = payload or {}
     async with pool.acquire() as conn:
@@ -221,6 +380,8 @@ async def _ensure_audit_table(pool):
 @app.on_event("startup")
 async def _startup():
     await ensure_rbac_schema()
+    pool = await get_pool()
+    await _ensure_game_actions_table(pool)
 
 
 @app.get("/health")
@@ -1051,6 +1212,335 @@ async def vehicle_patch(
 
     await _audit(pool, admin.login, "VEHICLE_EDIT", {"vehicle_id": vehicle_id}, updates)
     return {"ok": True, "item": _format_vehicle_row(row), "updated_fields": sorted(updates.keys())}
+
+
+@app.get("/game-actions/templates")
+async def game_actions_templates(
+    active_only: bool = Query(False),
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    pool = await get_pool()
+    await _ensure_game_actions_table(pool)
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            if active_only:
+                await cur.execute(
+                    """
+                    SELECT id, name, description, action_type, resource_name, action_name, variables_json, is_active, created_at, updated_at
+                    FROM web_game_action_templates
+                    WHERE is_active = 1
+                    ORDER BY id ASC
+                    """
+                )
+            else:
+                await cur.execute(
+                    """
+                    SELECT id, name, description, action_type, resource_name, action_name, variables_json, is_active, created_at, updated_at
+                    FROM web_game_action_templates
+                    ORDER BY id ASC
+                    """
+                )
+            rows = await cur.fetchall()
+
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["variables"] = _safe_json(row.get("variables_json")) if row.get("variables_json") is not None else []
+        if isinstance(item["variables"], dict):
+            item["variables"] = []
+        item.pop("variables_json", None)
+        items.append(item)
+    return {"items": items}
+
+
+@app.post("/game-actions/templates")
+async def game_actions_template_create(
+    body: GameActionTemplateCreateBody,
+    admin: AdminContext = Depends(require_permission("actions.manage_templates")),
+):
+    if body.action_type == "export" and not (body.resource_name or "").strip():
+        raise HTTPException(400, "resource_name is required for export action")
+
+    variables = _clean_template_variables(body.variables)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    pool = await get_pool()
+    await _ensure_game_actions_table(pool)
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO web_game_action_templates
+                (name, description, action_type, resource_name, action_name, variables_json, is_active, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    body.name.strip(),
+                    (body.description or "").strip() or None,
+                    body.action_type,
+                    (body.resource_name or "").strip() or None,
+                    body.action_name.strip(),
+                    json.dumps(variables, ensure_ascii=False),
+                    1 if body.is_active else 0,
+                    now,
+                    now,
+                ),
+            )
+            new_id = int(cur.lastrowid)
+
+    await _audit(
+        pool,
+        admin.login,
+        "GAME_ACTION_TEMPLATE_CREATE",
+        {"template_id": new_id},
+        {
+            "name": body.name.strip(),
+            "action_type": body.action_type,
+            "resource_name": (body.resource_name or "").strip() or None,
+            "action_name": body.action_name.strip(),
+            "variables_count": len(variables),
+        },
+    )
+    return {"ok": True, "id": new_id}
+
+
+@app.patch("/game-actions/templates/{template_id}")
+async def game_actions_template_patch(
+    template_id: int,
+    body: GameActionTemplatePatchBody,
+    admin: AdminContext = Depends(require_permission("actions.manage_templates")),
+):
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(400, "No fields to update")
+
+    if "action_type" in updates and updates["action_type"] == "export":
+        incoming_resource_name = (body.resource_name or "").strip()
+        if incoming_resource_name == "":
+            raise HTTPException(400, "resource_name is required for export action")
+
+    fields: list[str] = []
+    args: list[Any] = []
+    audit_payload: dict[str, Any] = {}
+
+    if body.name is not None:
+        fields.append("name=%s")
+        args.append(body.name.strip())
+        audit_payload["name"] = body.name.strip()
+    if body.description is not None:
+        desc = body.description.strip() or None
+        fields.append("description=%s")
+        args.append(desc)
+        audit_payload["description"] = desc
+    if body.action_type is not None:
+        fields.append("action_type=%s")
+        args.append(body.action_type)
+        audit_payload["action_type"] = body.action_type
+    if body.resource_name is not None:
+        resource = body.resource_name.strip() or None
+        fields.append("resource_name=%s")
+        args.append(resource)
+        audit_payload["resource_name"] = resource
+    if body.action_name is not None:
+        fields.append("action_name=%s")
+        args.append(body.action_name.strip())
+        audit_payload["action_name"] = body.action_name.strip()
+    if body.variables is not None:
+        clean_vars = _clean_template_variables(body.variables)
+        fields.append("variables_json=%s")
+        args.append(json.dumps(clean_vars, ensure_ascii=False))
+        audit_payload["variables_count"] = len(clean_vars)
+    if body.is_active is not None:
+        fields.append("is_active=%s")
+        args.append(1 if body.is_active else 0)
+        audit_payload["is_active"] = body.is_active
+
+    fields.append("updated_at=%s")
+    args.append(datetime.now(UTC).replace(tzinfo=None))
+    args.append(template_id)
+
+    pool = await get_pool()
+    await _ensure_game_actions_table(pool)
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                f"UPDATE web_game_action_templates SET {', '.join(fields)} WHERE id = %s",
+                tuple(args),
+            )
+            if cur.rowcount <= 0:
+                raise HTTPException(404, "Template not found")
+
+    await _audit(pool, admin.login, "GAME_ACTION_TEMPLATE_PATCH", {"template_id": template_id}, audit_payload)
+    return {"ok": True}
+
+
+@app.delete("/game-actions/templates/{template_id}")
+async def game_actions_template_delete(
+    template_id: int,
+    admin: AdminContext = Depends(require_permission("actions.manage_templates")),
+):
+    pool = await get_pool()
+    await _ensure_game_actions_table(pool)
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE web_game_action_templates SET is_active=0, updated_at=%s WHERE id=%s",
+                (datetime.now(UTC).replace(tzinfo=None), template_id),
+            )
+            if cur.rowcount <= 0:
+                raise HTTPException(404, "Template not found")
+
+    await _audit(pool, admin.login, "GAME_ACTION_TEMPLATE_DELETE", {"template_id": template_id}, {})
+    return {"ok": True}
+
+
+@app.get("/players/{citizenid}/online-status")
+async def player_online_status(
+    citizenid: str,
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT p.citizenid, p.license, p.name, s.static_id, s.discord_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE p.citizenid = %s
+                LIMIT 1
+                """,
+                (citizenid,),
+            )
+            p = await cur.fetchone()
+            if not p:
+                raise HTTPException(404, "Player not found")
+
+    payload = {
+        "player": {
+            "citizenid": p.get("citizenid"),
+            "static_id": p.get("static_id"),
+            "license": p.get("license"),
+            "discord_id": p.get("discord_id"),
+            "name": p.get("name"),
+        }
+    }
+    status = _post_bridge_status(payload)
+    return {
+        "ok": bool(status.get("ok", False)),
+        "online": bool(status.get("online", False)),
+        "source": status.get("source"),
+        "player_name": status.get("player_name"),
+    }
+
+
+@app.post("/players/{citizenid}/game-actions/execute")
+async def player_game_action_execute(
+    citizenid: str,
+    body: GameActionExecuteBody,
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    pool = await get_pool()
+    await _ensure_game_actions_table(pool)
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT p.citizenid, p.license, p.name, s.static_id, s.discord_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE p.citizenid = %s
+                LIMIT 1
+                """,
+                (citizenid,),
+            )
+            p = await cur.fetchone()
+            if not p:
+                raise HTTPException(404, "Player not found")
+
+            await cur.execute(
+                """
+                SELECT id, name, action_type, resource_name, action_name, variables_json, is_active
+                FROM web_game_action_templates
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (body.template_id,),
+            )
+            tmpl = await cur.fetchone()
+            if not tmpl:
+                raise HTTPException(404, "Template not found")
+            if int(tmpl.get("is_active") or 0) == 0:
+                raise HTTPException(400, "Template is inactive")
+
+    variables = _safe_json(tmpl.get("variables_json")) if tmpl.get("variables_json") is not None else []
+    if not isinstance(variables, list):
+        variables = []
+
+    player_ctx = {
+        "citizenid": p.get("citizenid"),
+        "static_id": p.get("static_id"),
+        "license": p.get("license"),
+        "discord_id": p.get("discord_id"),
+        "name": p.get("name"),
+    }
+
+    status = _post_bridge_status({"player": player_ctx})
+    source_id = status.get("source")
+    if not bool(status.get("online")) or source_id is None:
+        raise HTTPException(400, "Player is offline. In-game interaction is unavailable.")
+    player_ctx["source"] = source_id
+    player_ctx["targetId"] = source_id
+    player_ctx["target_id"] = source_id
+
+    values: dict[str, Any] = {}
+    args: list[Any] = []
+    for var in variables:
+        if not isinstance(var, dict):
+            continue
+        key = str(var.get("key") or "").strip()
+        if not key:
+            continue
+
+        required = bool(var.get("required", True))
+        value_type = str(var.get("value_type") or "string")
+
+        raw = body.values.get(key)
+        if raw is None and key in player_ctx:
+            raw = player_ctx.get(key)
+        if raw is None and var.get("default_value") not in (None, ""):
+            raw = var.get("default_value")
+
+        if required and (raw is None or raw == ""):
+            raise HTTPException(400, f"Missing required variable: {key}")
+
+        converted = _convert_variable_value(raw, value_type)
+        values[key] = converted
+        args.append(converted)
+
+    bridge_payload = {
+        "template": {
+            "id": tmpl.get("id"),
+            "name": tmpl.get("name"),
+            "action_type": tmpl.get("action_type"),
+            "resource_name": tmpl.get("resource_name"),
+            "action_name": tmpl.get("action_name"),
+        },
+        "player": player_ctx,
+        "values": values,
+        "args": args,
+        "requested_by": {"admin_id": admin.admin_id, "login": admin.login},
+    }
+
+    bridge_response = _post_bridge_execute(bridge_payload)
+
+    await _audit(
+        pool,
+        admin.login,
+        "GAME_ACTION_EXECUTE",
+        {"citizenid": citizenid, "template_id": tmpl.get("id"), "template_name": tmpl.get("name")},
+        {"source": source_id, "values": values, "bridge_response": bridge_response},
+    )
+    return {"ok": True, "bridge": bridge_response}
 
 
 @app.get("/audit")

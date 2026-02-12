@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -21,17 +21,19 @@ type DiscordAssignmentRes = { items: AdminRow[] };
 
 const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   "*": "Полный доступ ко всем действиям.",
-  "admins.manage": "Управление администраторами, roles и permissions.",
+  "admins.manage": "Управление администраторами, ролями и permissions.",
   "audit.read": "Просмотр журнала аудита.",
-  "players.read": "Просмотр профилей и результатов поиска игроков.",
-  "players.edit_profile": "Редактирование полей профиля: firstname, phone, birthdate, nationality.",
-  "players.manage_wl": "Выдача и снятие whitelist.",
+  "players.read": "Просмотр профилей и поиска игроков.",
+  "players.edit_profile": "Редактирование полей профиля игрока.",
+  "players.manage_wl": "Выдача и снятие WL.",
   "players.manage_ban": "Выдача и снятие WL-бана.",
   "players.manage_slots": "Изменение количества слотов персонажа.",
-  "players.delete_character": "Удаление персонажа из базы.",
-  "vehicles.read": "Просмотр поиска машин и карточек транспортных средств.",
-  "vehicles.edit": "Редактирование данных машины (plate/fakeplate/garage_id и т.д.).",
-  "auth.discord_login": "Служебный permission для Discord OAuth (назначается автоматически).",
+  "players.delete_character": "Удаление персонажа.",
+  "players.game_interact": "Выполнение внутриигровых шаблонов в карточке игрока.",
+  "vehicles.read": "Просмотр поиска и карточек машин.",
+  "vehicles.edit": "Редактирование карточки машины.",
+  "actions.manage_templates": "Создание и редактирование шаблонов внутриигровых действий.",
+  "auth.discord_login": "Служебный permission для входа через Discord OAuth.",
 };
 
 function errorText(e: unknown): string {
@@ -185,7 +187,7 @@ export default function AdminsPage() {
   async function saveDiscordAssignment() {
     const idStr = assignDiscordId.trim();
     if (!/^\d+$/.test(idStr)) {
-      setErr("Укажи корректный Discord ID");
+      setErr("Ð£ÐºÐ°Ð¶Ð¸ ÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ Discord ID");
       return;
     }
 
@@ -215,11 +217,11 @@ export default function AdminsPage() {
     <main className="container">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <div>
-          <h1 className="title">Доступ админов</h1>
-          <div className="muted">{me ? `Вы вошли как: ${me.login} (${roleLabel(me.role_name)})` : "Загрузка..."}</div>
+          <h1 className="title">Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð°Ð´Ð¼Ð¸Ð½Ð¾Ð²</h1>
+          <div className="muted">{me ? `Ð’Ñ‹ Ð²Ð¾ÑˆÐ»Ð¸ ÐºÐ°Ðº: ${me.login} (${roleLabel(me.role_name)})` : "Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°..."}</div>
         </div>
         <Link className="btn secondary" href="/players">
-          К списку игроков
+          Ðš ÑÐ¿Ð¸ÑÐºÑƒ Ð¸Ð³Ñ€Ð¾ÐºÐ¾Ð²
         </Link>
       </div>
 
@@ -227,14 +229,14 @@ export default function AdminsPage() {
 
       {!can(me, "admins.manage") ? (
         <section className="card" style={{ marginTop: 14 }}>
-          <h3>Нет доступа</h3>
-          <p>Требуется permission `admins.manage`.</p>
+          <h3>ÐÐµÑ‚ Ð´Ð¾ÑÑ‚ÑƒÐ¿Ð°</h3>
+          <p>Ð¢Ñ€ÐµÐ±ÑƒÐµÑ‚ÑÑ permission `admins.manage`.</p>
         </section>
       ) : (
         <>
           <section className="card" style={{ marginTop: 14 }}>
-            <h3>Выдача роли по Discord ID</h3>
-            <div className="small">Добавь Discord ID, укажи login (опционально) и роль для входа через Discord OAuth.</div>
+            <h3>Ð’Ñ‹Ð´Ð°Ñ‡Ð° Ñ€Ð¾Ð»Ð¸ Ð¿Ð¾ Discord ID</h3>
+            <div className="small">Ð”Ð¾Ð±Ð°Ð²ÑŒ Discord ID, ÑƒÐºÐ°Ð¶Ð¸ login (Ð¾Ð¿Ñ†Ð¸Ð¾Ð½Ð°Ð»ÑŒÐ½Ð¾) Ð¸ Ñ€Ð¾Ð»ÑŒ Ð´Ð»Ñ Ð²Ñ…Ð¾Ð´Ð° Ñ‡ÐµÑ€ÐµÐ· Discord OAuth.</div>
             <div className="row" style={{ flexWrap: "wrap", marginTop: 10 }}>
               <input
                 className="input"
@@ -245,7 +247,7 @@ export default function AdminsPage() {
               />
               <input
                 className="input"
-                placeholder="login (опционально)"
+                placeholder="login (Ð¾Ð¿Ñ†Ð¸Ð¾Ð½Ð°Ð»ÑŒÐ½Ð¾)"
                 value={assignLogin}
                 onChange={(e) => setAssignLogin(e.target.value)}
                 style={{ minWidth: 220 }}
@@ -262,7 +264,7 @@ export default function AdminsPage() {
                 active
               </label>
               <button className="btn" disabled={busy || assignDiscordId.trim().length < 5} onClick={saveDiscordAssignment}>
-                Сохранить
+                Ð¡Ð¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚ÑŒ
               </button>
             </div>
 
@@ -289,7 +291,7 @@ export default function AdminsPage() {
                   ))}
                   {discordAssignments.length === 0 && (
                     <tr>
-                      <td colSpan={5}>Нет записей</td>
+                      <td colSpan={5}>ÐÐµÑ‚ Ð·Ð°Ð¿Ð¸ÑÐµÐ¹</td>
                     </tr>
                   )}
                 </tbody>
@@ -299,7 +301,7 @@ export default function AdminsPage() {
 
           <section className="card" style={{ marginTop: 14 }}>
             <h3>Roles</h3>
-            <div className="small">Выберите permissions через чекбоксы и сохраните role.</div>
+            <div className="small">Ð’Ñ‹Ð±ÐµÑ€Ð¸Ñ‚Ðµ permissions Ñ‡ÐµÑ€ÐµÐ· Ñ‡ÐµÐºÐ±Ð¾ÐºÑÑ‹ Ð¸ ÑÐ¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚Ðµ role.</div>
             <div className="grid" style={{ marginTop: 10 }}>
               {roles.map((role) => (
                 <article key={role.role_name} className="card">
@@ -327,7 +329,7 @@ export default function AdminsPage() {
                               <div>
                                 <div className="permCode">{permission}</div>
                                 <div className="small">
-                                  {PERMISSION_DESCRIPTIONS[permission] || "Описание для permission не задано."}
+                                  {PERMISSION_DESCRIPTIONS[permission] || "ÐžÐ¿Ð¸ÑÐ°Ð½Ð¸Ðµ Ð´Ð»Ñ permission Ð½Ðµ Ð·Ð°Ð´Ð°Ð½Ð¾."}
                                 </div>
                               </div>
                             </label>
@@ -339,7 +341,7 @@ export default function AdminsPage() {
 
                   <div style={{ marginTop: 10 }}>
                     <button className="btn" disabled={busy} onClick={() => saveRole(role.role_name)}>
-                      Сохранить permissions
+                      Ð¡Ð¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚ÑŒ permissions
                     </button>
                   </div>
                 </article>
@@ -348,7 +350,7 @@ export default function AdminsPage() {
           </section>
 
           <section className="card" style={{ marginTop: 14 }}>
-            <h3>Администраторы</h3>
+            <h3>ÐÐ´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€Ñ‹</h3>
             <div className="tableWrap">
               <table className="table">
                 <thead>
@@ -358,7 +360,7 @@ export default function AdminsPage() {
                     <th>Discord ID</th>
                     <th>Role</th>
                     <th>Active</th>
-                    <th>Действия</th>
+                    <th>Ð”ÐµÐ¹ÑÑ‚Ð²Ð¸Ñ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -402,3 +404,4 @@ export default function AdminsPage() {
     </main>
   );
 }
+
