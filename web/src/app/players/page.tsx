@@ -214,7 +214,7 @@ export default function Players() {
                         </>
                       ) : p.online_citizenid ? (
                         <>
-                          Онлайн ID {String(p.online_source ?? "-")} (
+                          Оффлайн. Онлайн на ID {String(p.online_source ?? "-")} (
                           <Link className="link" href={`/players/${p.online_citizenid}`}>
                             {p.online_citizenid}
                           </Link>

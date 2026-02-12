@@ -61,6 +61,8 @@ local function buildOnlinePlayerSnapshot(src)
         firstname = nil,
         lastname = nil,
         phone = nil,
+        job = nil,
+        gang = nil,
     }
 
     local okPlayer, player = pcall(function()
@@ -70,6 +72,9 @@ local function buildOnlinePlayerSnapshot(src)
         local pd = player.PlayerData
         item.citizenid = pd.citizenid
         item.name = (pd.name and tostring(pd.name)) or item.name
+        if not item.static_id then
+            item.static_id = pd.static_id or pd.staticid
+        end
         if pd.charinfo then
             item.firstname = pd.charinfo.firstname
             item.lastname = pd.charinfo.lastname
@@ -77,6 +82,12 @@ local function buildOnlinePlayerSnapshot(src)
             if (not item.name or item.name == "") and (item.firstname or item.lastname) then
                 item.name = ((item.firstname or "") .. " " .. (item.lastname or "")):gsub("^%s+", ""):gsub("%s+$", "")
             end
+        end
+        if pd.job then
+            item.job = pd.job.label or pd.job.name
+        end
+        if pd.gang then
+            item.gang = pd.gang.label or pd.gang.name
         end
     end
 

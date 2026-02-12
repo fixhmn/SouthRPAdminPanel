@@ -758,6 +758,7 @@ async def players_search(
 
     online_by_citizen: dict[str, dict[str, Any]] = {}
     online_by_static: dict[int, dict[str, Any]] = {}
+    missing_static_citizens: list[str] = []
     for row in online_items:
         online_citizen = str(row.get("citizenid") or "").strip()
         if online_citizen:
@@ -766,8 +767,43 @@ async def players_search(
         try:
             if static_val is not None:
                 online_by_static[int(static_val)] = row
+            elif online_citizen:
+                missing_static_citizens.append(online_citizen)
         except Exception:
-            pass
+            if online_citizen:
+                missing_static_citizens.append(online_citizen)
+
+    # Fallback: enrich bridge online rows with static_id from DB by citizenid.
+    if missing_static_citizens:
+        uniq_missing = sorted(set(x for x in missing_static_citizens if x))
+        if uniq_missing:
+            placeholders = ",".join(["%s"] * len(uniq_missing))
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        f"""
+                        SELECT p.citizenid, s.static_id
+                        FROM players p
+                        LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                        WHERE p.citizenid IN ({placeholders})
+                        """,
+                        tuple(uniq_missing),
+                    )
+                    static_rows = await cur.fetchall()
+            for row in static_rows:
+                citizen_key = str(row.get("citizenid") or "").strip()
+                static_val = row.get("static_id")
+                if not citizen_key or static_val is None:
+                    continue
+                online_row = online_by_citizen.get(citizen_key)
+                if not online_row:
+                    continue
+                try:
+                    static_num = int(static_val)
+                    online_row["static_id"] = static_num
+                    online_by_static[static_num] = online_row
+                except Exception:
+                    continue
 
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -911,12 +947,14 @@ async def players_online(
         raw_items = []
 
     online_items: list[dict[str, Any]] = []
+    online_citizenids: list[str] = []
     for row in raw_items:
         if not isinstance(row, dict):
             continue
         citizenid = str(row.get("citizenid") or "").strip()
         if not citizenid:
             continue
+        online_citizenids.append(citizenid)
         online_items.append(
             {
                 "citizenid": citizenid,
@@ -926,11 +964,45 @@ async def players_online(
                 "firstname": row.get("firstname"),
                 "lastname": row.get("lastname"),
                 "phone": row.get("phone"),
+                "job": row.get("job"),
+                "gang": row.get("gang"),
                 "source": row.get("source"),
             }
         )
         if len(online_items) >= limit:
             break
+
+    # Fallback static_id from DB when bridge could not resolve it for a player.
+    if online_citizenids:
+        placeholders = ",".join(["%s"] * len(online_citizenids))
+        pool = await get_pool()
+        db_static_by_citizen: dict[str, int] = {}
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    f"""
+                    SELECT p.citizenid, s.static_id
+                    FROM players p
+                    LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                    WHERE p.citizenid IN ({placeholders})
+                    """,
+                    tuple(online_citizenids),
+                )
+                rows = await cur.fetchall()
+        for row in rows:
+            try:
+                citizen = str(row.get("citizenid") or "").strip()
+                static_val = row.get("static_id")
+                if citizen and static_val is not None:
+                    db_static_by_citizen[citizen] = int(static_val)
+            except Exception:
+                continue
+
+        for item in online_items:
+            if item.get("static_id") is None:
+                fallback_static = db_static_by_citizen.get(str(item.get("citizenid") or ""))
+                if fallback_static is not None:
+                    item["static_id"] = fallback_static
 
     return {
         "count": len(online_items),

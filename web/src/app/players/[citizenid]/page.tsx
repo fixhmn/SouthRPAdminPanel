@@ -113,6 +113,12 @@ function stringifyValue(value: unknown): string {
   }
 }
 
+function genderLabel(value: unknown): string {
+  if (value === 0 || value === "0") return "Мужской";
+  if (value === 1 || value === "1") return "Женский";
+  return stringifyValue(value);
+}
+
 function labelFromItem(item: InventoryItem): string {
   return item.resolved_label || item.label || item.name || item.item || "неизвестный предмет";
 }
@@ -694,7 +700,7 @@ export default function PlayerPage() {
             </div>
             <div className="metaLine">
               <span className="metaKey">Пол</span>
-              {stringifyValue(ci.gender)}
+              {genderLabel(ci.gender)}
             </div>
             <div className="metaLine">
               <span className="metaKey">Национальность</span>

@@ -10,10 +10,10 @@ type OnlineRes = {
     citizenid: string;
     name?: string;
     static_id?: number;
-    discord_id?: number;
     firstname?: string;
     lastname?: string;
-    phone?: string;
+    job?: string | null;
+    gang?: string | null;
     source?: number;
   }>;
 };
@@ -120,15 +120,15 @@ export default function OnlinePlayersPage() {
                     </div>
                   </div>
                   <div className="searchMetaLine">
-                    <span className="searchMetaKey">Discord ID</span>
-                    <div className="searchMetaValue" title={String(p.discord_id ?? "-")}>
-                      {p.discord_id ?? "-"}
+                    <span className="searchMetaKey">Job</span>
+                    <div className="searchMetaValue" title={String(p.job ?? "-")}>
+                      {p.job ?? "-"}
                     </div>
                   </div>
                   <div className="searchMetaLine">
-                    <span className="searchMetaKey">Phone</span>
-                    <div className="searchMetaValue" title={String(p.phone ?? "-")}>
-                      {p.phone ?? "-"}
+                    <span className="searchMetaKey">Gang</span>
+                    <div className="searchMetaValue" title={String(p.gang ?? "-")}>
+                      {p.gang ?? "-"}
                     </div>
                   </div>
                 </div>
