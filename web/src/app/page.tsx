@@ -141,6 +141,18 @@ function HomeContent() {
               </article>
             )}
 
+            {can(me, "players.read") && (
+              <article className="card">
+                <h3 style={{ marginTop: 0 }}>Онлайн персонажи</h3>
+                <p className="small">Список активных персонажей в сети с быстрым переходом в карточку.</p>
+                <div style={{ marginTop: 10 }}>
+                  <Link className="btn" href="/players/online">
+                    Открыть
+                  </Link>
+                </div>
+              </article>
+            )}
+
             {can(me, "vehicles.read") && (
               <article className="card">
                 <h3 style={{ marginTop: 0 }}>Поиск машин</h3>

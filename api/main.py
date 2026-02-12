@@ -1754,22 +1754,47 @@ async def player_online_status(
             p = await cur.fetchone()
             if not p:
                 raise HTTPException(404, "Player not found")
+    online_payload = _post_bridge_online_list({})
+    raw_items = online_payload.get("items")
+    items = raw_items if isinstance(raw_items, list) else []
 
-    payload = {
-        "player": {
-            "citizenid": p.get("citizenid"),
-            "static_id": p.get("static_id"),
-            "license": p.get("license"),
-            "discord_id": p.get("discord_id"),
-            "name": p.get("name"),
-        }
-    }
-    status = _post_bridge_status(payload)
+    requested_citizenid = str(p.get("citizenid") or "").strip()
+    requested_static = p.get("static_id")
+    same_char: dict[str, Any] | None = None
+    other_same_static: dict[str, Any] | None = None
+
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        row_citizenid = str(row.get("citizenid") or "").strip()
+        if row_citizenid and row_citizenid == requested_citizenid:
+            same_char = row
+            break
+
+    if same_char is None and requested_static is not None:
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            row_citizenid = str(row.get("citizenid") or "").strip()
+            if row_citizenid == requested_citizenid:
+                continue
+            try:
+                if row.get("static_id") is not None and int(row.get("static_id")) == int(requested_static):
+                    other_same_static = row
+                    break
+            except Exception:
+                continue
+
+    status = same_char or {}
     return {
-        "ok": bool(status.get("ok", False)),
-        "online": bool(status.get("online", False)),
+        "ok": True,
+        "online": same_char is not None,
         "source": status.get("source"),
         "player_name": status.get("player_name"),
+        "online_citizenid": status.get("citizenid"),
+        "online_on_other_character": other_same_static is not None,
+        "other_source": other_same_static.get("source") if other_same_static else None,
+        "other_citizenid": other_same_static.get("citizenid") if other_same_static else None,
     }
 
 

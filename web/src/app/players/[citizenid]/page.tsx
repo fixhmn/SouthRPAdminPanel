@@ -92,6 +92,10 @@ type OnlineStatus = {
   online: boolean;
   source?: number | null;
   player_name?: string | null;
+  online_citizenid?: string | null;
+  online_on_other_character?: boolean;
+  other_source?: number | null;
+  other_citizenid?: string | null;
 };
 
 const AUTO_VARIABLE_KEYS = new Set(["targetId", "target_id", "source", "static_id"]);
@@ -569,6 +573,15 @@ export default function PlayerPage() {
                     ? `Онлайн (ID ${String(onlineStatus.source ?? "-")})`
                     : "Оффлайн"}
               </div>
+              {onlineStatus?.online_on_other_character && onlineStatus.other_citizenid && (
+                <div style={{ fontWeight: 700, color: "#f6c85f" }}>
+                  Игрок онлайн на персонаже ID {String(onlineStatus.other_source ?? "-")} (
+                  <Link className="link" href={`/players/${onlineStatus.other_citizenid}`}>
+                    {String(onlineStatus.other_citizenid)}
+                  </Link>
+                  )
+                </div>
+              )}
             </div>
           )}
           <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
