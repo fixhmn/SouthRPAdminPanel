@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from auth import (
+    ALLOWED_ROLES,
     AdminContext,
     KNOWN_PERMISSIONS,
     ensure_rbac_schema,
@@ -136,6 +137,7 @@ class GameActionTemplateCreateBody(BaseModel):
     resource_name: str | None = Field(default=None, max_length=64)
     action_name: str = Field(min_length=1, max_length=128)
     variables: list[GameActionVariableBody] = Field(default_factory=list)
+    allowed_roles: list[str] = Field(default_factory=list)
     is_active: bool = True
 
 
@@ -146,6 +148,7 @@ class GameActionTemplatePatchBody(BaseModel):
     resource_name: str | None = Field(default=None, max_length=64)
     action_name: str | None = Field(default=None, min_length=1, max_length=128)
     variables: list[GameActionVariableBody] | None = None
+    allowed_roles: list[str] | None = None
     is_active: bool | None = None
 
 
@@ -262,6 +265,22 @@ def _clean_template_variables(variables: list[GameActionVariableBody] | None) ->
     return out
 
 
+def _clean_template_roles(roles: list[str] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for role in roles or []:
+        role_name = (role or "").strip().lower()
+        if not role_name:
+            continue
+        if role_name not in ALLOWED_ROLES:
+            raise HTTPException(400, f"Unknown role: {role_name}")
+        if role_name in seen:
+            continue
+        seen.add(role_name)
+        out.append(role_name)
+    return out
+
+
 def _convert_variable_value(raw_value: Any, value_type: str) -> Any:
     if value_type == "number":
         if raw_value is None or raw_value == "":
@@ -301,12 +320,19 @@ async def _ensure_game_actions_table(pool):
                     resource_name VARCHAR(64) NULL,
                     action_name VARCHAR(128) NOT NULL,
                     variables_json JSON NOT NULL,
+                    allowed_roles_json JSON NULL,
                     is_active TINYINT(1) NOT NULL DEFAULT 1,
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL
                 )
                 """
             )
+            await cur.execute("SHOW COLUMNS FROM web_game_action_templates LIKE 'allowed_roles_json'")
+            has_allowed_roles = await cur.fetchone()
+            if not has_allowed_roles:
+                await cur.execute(
+                    "ALTER TABLE web_game_action_templates ADD COLUMN allowed_roles_json JSON NULL AFTER variables_json"
+                )
 
 
 def _post_bridge_execute(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1261,7 +1287,7 @@ async def game_actions_templates(
             if active_only:
                 await cur.execute(
                     """
-                    SELECT id, name, description, action_type, resource_name, action_name, variables_json, is_active, created_at, updated_at
+                    SELECT id, name, description, action_type, resource_name, action_name, variables_json, allowed_roles_json, is_active, created_at, updated_at
                     FROM web_game_action_templates
                     WHERE is_active = 1
                     ORDER BY id ASC
@@ -1270,7 +1296,7 @@ async def game_actions_templates(
             else:
                 await cur.execute(
                     """
-                    SELECT id, name, description, action_type, resource_name, action_name, variables_json, is_active, created_at, updated_at
+                    SELECT id, name, description, action_type, resource_name, action_name, variables_json, allowed_roles_json, is_active, created_at, updated_at
                     FROM web_game_action_templates
                     ORDER BY id ASC
                     """
@@ -1280,12 +1306,29 @@ async def game_actions_templates(
     items = []
     for row in rows:
         item = dict(row)
+        allowed_roles = _safe_json(row.get("allowed_roles_json")) if row.get("allowed_roles_json") is not None else []
+        if not isinstance(allowed_roles, list):
+            allowed_roles = []
+        allowed_roles = _clean_template_roles([str(x) for x in allowed_roles if isinstance(x, str)])
+        can_manage_templates = "*" in admin.permissions or "actions.manage_templates" in admin.permissions
+        if allowed_roles and admin.role_name not in allowed_roles and not can_manage_templates:
+            continue
         item["variables"] = _safe_json(row.get("variables_json")) if row.get("variables_json") is not None else []
         if isinstance(item["variables"], dict):
             item["variables"] = []
+        item["allowed_roles"] = allowed_roles
         item.pop("variables_json", None)
+        item.pop("allowed_roles_json", None)
         items.append(item)
     return {"items": items}
+
+
+@app.get("/game-actions/allowed-roles")
+async def game_actions_allowed_roles(
+    admin: AdminContext = Depends(require_permission("actions.manage_templates")),
+):
+    del admin
+    return {"items": sorted(ALLOWED_ROLES)}
 
 
 @app.post("/game-actions/templates")
@@ -1297,6 +1340,7 @@ async def game_actions_template_create(
         raise HTTPException(400, "resource_name is required for export action")
 
     variables = _clean_template_variables(body.variables)
+    allowed_roles = _clean_template_roles(body.allowed_roles)
     now = datetime.now(UTC).replace(tzinfo=None)
     pool = await get_pool()
     await _ensure_game_actions_table(pool)
@@ -1305,8 +1349,8 @@ async def game_actions_template_create(
             await cur.execute(
                 """
                 INSERT INTO web_game_action_templates
-                (name, description, action_type, resource_name, action_name, variables_json, is_active, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                (name, description, action_type, resource_name, action_name, variables_json, allowed_roles_json, is_active, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     body.name.strip(),
@@ -1315,6 +1359,7 @@ async def game_actions_template_create(
                     (body.resource_name or "").strip() or None,
                     body.action_name.strip(),
                     json.dumps(variables, ensure_ascii=False),
+                    json.dumps(allowed_roles, ensure_ascii=False),
                     1 if body.is_active else 0,
                     now,
                     now,
@@ -1333,6 +1378,7 @@ async def game_actions_template_create(
             "resource_name": (body.resource_name or "").strip() or None,
             "action_name": body.action_name.strip(),
             "variables_count": len(variables),
+            "allowed_roles": allowed_roles,
         },
     )
     return {"ok": True, "id": new_id}
@@ -1384,6 +1430,11 @@ async def game_actions_template_patch(
         fields.append("variables_json=%s")
         args.append(json.dumps(clean_vars, ensure_ascii=False))
         audit_payload["variables_count"] = len(clean_vars)
+    if body.allowed_roles is not None:
+        clean_roles = _clean_template_roles(body.allowed_roles)
+        fields.append("allowed_roles_json=%s")
+        args.append(json.dumps(clean_roles, ensure_ascii=False))
+        audit_payload["allowed_roles"] = clean_roles
     if body.is_active is not None:
         fields.append("is_active=%s")
         args.append(1 if body.is_active else 0)
@@ -1763,7 +1814,7 @@ async def player_game_action_execute(
 
             await cur.execute(
                 """
-                SELECT id, name, action_type, resource_name, action_name, variables_json, is_active
+                SELECT id, name, action_type, resource_name, action_name, variables_json, allowed_roles_json, is_active
                 FROM web_game_action_templates
                 WHERE id = %s
                 LIMIT 1
@@ -1775,6 +1826,12 @@ async def player_game_action_execute(
                 raise HTTPException(404, "Template not found")
             if int(tmpl.get("is_active") or 0) == 0:
                 raise HTTPException(400, "Template is inactive")
+            allowed_roles = _safe_json(tmpl.get("allowed_roles_json")) if tmpl.get("allowed_roles_json") is not None else []
+            if not isinstance(allowed_roles, list):
+                allowed_roles = []
+            clean_roles = _clean_template_roles([str(x) for x in allowed_roles if isinstance(x, str)])
+            if clean_roles and admin.role_name not in clean_roles and "*" not in admin.permissions:
+                raise HTTPException(403, "Your role is not allowed to execute this template")
 
     variables = _safe_json(tmpl.get("variables_json")) if tmpl.get("variables_json") is not None else []
     if not isinstance(variables, list):
