@@ -153,6 +153,11 @@ class GameActionExecuteBody(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+class ItemDebugBody(BaseModel):
+    item: str = Field(min_length=1, max_length=128)
+    amount: int = Field(default=1, ge=1, le=1000000)
+
+
 def _charinfo_to_dict(charinfo):
     if isinstance(charinfo, str):
         try:
@@ -209,6 +214,10 @@ def _normalize_inventory_like(raw_value):
     return out
 
 
+def _normalize_item_key(v: str | None) -> str:
+    return (v or "").strip().lower()
+
+
 def _clean_template_variables(variables: list[GameActionVariableBody] | None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -250,7 +259,11 @@ def _convert_variable_value(raw_value: Any, value_type: str) -> Any:
         if sval in {"0", "false", "no", "off"}:
             return False
         raise HTTPException(400, f"Expected boolean, got: {raw_value}")
-    return "" if raw_value is None else str(raw_value)
+    if raw_value is None:
+        return ""
+    if isinstance(raw_value, str):
+        return raw_value.strip()
+    return str(raw_value)
 
 
 async def _ensure_game_actions_table(pool):
@@ -1383,8 +1396,8 @@ async def game_actions_template_delete(
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "UPDATE web_game_action_templates SET is_active=0, updated_at=%s WHERE id=%s",
-                (datetime.now(UTC).replace(tzinfo=None), template_id),
+                "DELETE FROM web_game_action_templates WHERE id=%s",
+                (template_id,),
             )
             if cur.rowcount <= 0:
                 raise HTTPException(404, "Template not found")
@@ -1430,6 +1443,152 @@ async def player_online_status(
         "online": bool(status.get("online", False)),
         "source": status.get("source"),
         "player_name": status.get("player_name"),
+    }
+
+
+@app.get("/items/check")
+async def item_check(
+    name: str = Query(..., min_length=1, max_length=128),
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    del admin
+    key = _normalize_item_key(name)
+    label = resolve_item_label(key)
+    image = resolve_item_image(key)
+    return {
+        "ok": True,
+        "item": key,
+        "exists_in_site_catalog": bool(label),
+        "label": label,
+        "image": image,
+        "image_url": _build_item_image_url(str(image) if image else None),
+    }
+
+
+@app.post("/players/{citizenid}/game-actions/debug-additem")
+async def player_game_action_debug_additem(
+    citizenid: str,
+    body: ItemDebugBody,
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT p.citizenid, p.license, p.name, s.static_id, s.discord_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE p.citizenid = %s
+                LIMIT 1
+                """,
+                (citizenid,),
+            )
+            p = await cur.fetchone()
+            if not p:
+                raise HTTPException(404, "Player not found")
+
+    player_ctx = {
+        "citizenid": p.get("citizenid"),
+        "static_id": p.get("static_id"),
+        "license": p.get("license"),
+        "discord_id": p.get("discord_id"),
+        "name": p.get("name"),
+    }
+    status = _post_bridge_status({"player": player_ctx})
+    source_id = status.get("source")
+    if not bool(status.get("online")) or source_id is None:
+        raise HTTPException(400, "Player is offline. In-game interaction is unavailable.")
+
+    item_key = _normalize_item_key(body.item)
+    amount = int(body.amount)
+
+    item_exists_payload = {
+        "template": {
+            "id": 0,
+            "name": "debug_item_exists",
+            "action_type": "export",
+            "resource_name": "ox_inventory",
+            "action_name": "Items",
+        },
+        "player": {**player_ctx, "source": source_id, "targetId": source_id, "target_id": source_id},
+        "values": {"item": item_key},
+        "args": [item_key],
+        "requested_by": {"admin_id": admin.admin_id, "login": admin.login},
+    }
+    item_exists_response: dict[str, Any] | None = None
+    item_exists_error: str | None = None
+    try:
+        item_exists_response = _post_bridge_execute(item_exists_payload)
+    except HTTPException as e:
+        item_exists_error = str(e.detail)
+
+    cancarry_payload = {
+        "template": {
+            "id": 0,
+            "name": "debug_can_carry",
+            "action_type": "export",
+            "resource_name": "ox_inventory",
+            "action_name": "CanCarryItem",
+        },
+        "player": {**player_ctx, "source": source_id, "targetId": source_id, "target_id": source_id},
+        "values": {"targetId": source_id, "item": item_key, "amount": amount},
+        "args": [source_id, item_key, amount],
+        "requested_by": {"admin_id": admin.admin_id, "login": admin.login},
+    }
+    cancarry_response: dict[str, Any] | None = None
+    cancarry_error: str | None = None
+    try:
+        cancarry_response = _post_bridge_execute(cancarry_payload)
+    except HTTPException as e:
+        cancarry_error = str(e.detail)
+
+    add_payload = {
+        "template": {
+            "id": 0,
+            "name": "debug_add_item",
+            "action_type": "export",
+            "resource_name": "ox_inventory",
+            "action_name": "AddItem",
+        },
+        "player": {**player_ctx, "source": source_id, "targetId": source_id, "target_id": source_id},
+        "values": {"targetId": source_id, "item": item_key, "amount": amount},
+        "args": [source_id, item_key, amount],
+        "requested_by": {"admin_id": admin.admin_id, "login": admin.login},
+    }
+    add_response: dict[str, Any] | None = None
+    add_error: str | None = None
+    try:
+        add_response = _post_bridge_execute(add_payload)
+    except HTTPException as e:
+        add_error = str(e.detail)
+
+    await _audit(
+        pool,
+        admin.login,
+        "GAME_ACTION_DEBUG_ADDITEM",
+        {"citizenid": citizenid, "item": item_key, "amount": amount},
+        {
+            "source": source_id,
+            "item_exists_response": item_exists_response,
+            "item_exists_error": item_exists_error,
+            "can_carry_response": cancarry_response,
+            "can_carry_error": cancarry_error,
+            "add_response": add_response,
+            "add_error": add_error,
+        },
+    )
+    return {
+        "ok": add_error is None,
+        "source": source_id,
+        "item": item_key,
+        "amount": amount,
+        "item_exists_response": item_exists_response,
+        "item_exists_error": item_exists_error,
+        "can_carry_response": cancarry_response,
+        "can_carry_error": cancarry_error,
+        "add_response": add_response,
+        "add_error": add_error,
     }
 
 
@@ -1516,6 +1675,8 @@ async def player_game_action_execute(
             raise HTTPException(400, f"Missing required variable: {key}")
 
         converted = _convert_variable_value(raw, value_type)
+        if key == "item" and isinstance(converted, str):
+            converted = _normalize_item_key(converted)
         values[key] = converted
         args.append(converted)
 
@@ -1871,8 +2032,3 @@ async def admin_deactivate(
 
     await _audit(pool, admin.login, "ADMIN_DEACTIVATE", {"admin_id": admin_id})
     return {"ok": True}
-
-
-
-
-

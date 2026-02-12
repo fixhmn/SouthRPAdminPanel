@@ -17,6 +17,13 @@ local function normalizeArgs(args)
     return args
 end
 
+local function hasPositionalArgs(args)
+    if type(args) ~= "table" then
+        return false
+    end
+    return args[1] ~= nil
+end
+
 local function asNumber(v)
     if type(v) == "number" then
         return v
@@ -88,13 +95,43 @@ local function executeExport(template, args)
         return false, "action_name is required for export", nil
     end
 
-    local ok, result = pcall(function()
+    local ok, result, result2, result3 = pcall(function()
         return exports[template.resource_name][template.action_name](table.unpack(args))
     end)
     if not ok then
         return false, tostring(result), nil
     end
-    return true, "export executed", result
+
+    -- Some exports (including ox_inventory:AddItem) can return false + reason.
+    if result == false then
+        local reason = result2 or "export returned false"
+        if template.resource_name == "ox_inventory" and template.action_name == "AddItem" then
+            local target = asNumber(args[1])
+            local itemName = args[2]
+            local amount = asNumber(args[3]) or 1
+
+            -- Fallback: some servers still expose qbx item add flow.
+            if tostring(reason) == "invalid_item" and target and type(itemName) == "string" and itemName ~= "" then
+                local okPlayer, player = pcall(function()
+                    return exports.qbx_core and exports.qbx_core:GetPlayer(target) or nil
+                end)
+                if okPlayer and player and player.Functions and player.Functions.AddItem then
+                    local okFallback, fallbackResult = pcall(function()
+                        return player.Functions.AddItem(itemName, amount)
+                    end)
+                    if okFallback and fallbackResult then
+                        return true, "export executed (qbx fallback)", {
+                            result = true,
+                            extra = { "qbx_fallback_used", itemName, amount },
+                        }
+                    end
+                end
+            end
+        end
+        return false, tostring(reason), { result = result, extra = { result2, result3 } }
+    end
+
+    return true, "export executed", { result = result, extra = { result2, result3 } }
 end
 
 local function executeServerEvent(template, args)
@@ -147,8 +184,37 @@ local function executePayload(payload)
     local template = payload.template or {}
     local actionType = template.action_type
     local args = normalizeArgs(payload.args)
+    local values = payload.values or {}
 
     if actionType == "export" then
+        -- Some JSON decoders can deserialize arrays in a way that drops positional unpacking.
+        -- Rebuild common ox_inventory calls from named values as a safe fallback.
+        if template.resource_name == "ox_inventory" then
+            if template.action_name == "Items" then
+                if type(values.item) == "string" and values.item ~= "" then
+                    args = { values.item }
+                elseif not hasPositionalArgs(args) then
+                    args = {}
+                end
+            elseif template.action_name == "CanCarryItem" then
+                local target = asNumber(values.targetId) or asNumber(values.target_id) or asNumber(values.source)
+                local item = values.item
+                local amount = asNumber(values.amount) or 1
+                if target and type(item) == "string" and item ~= "" then
+                    args = { target, item, amount }
+                end
+            elseif template.action_name == "AddItem" then
+                local target = asNumber(values.targetId) or asNumber(values.target_id) or asNumber(values.source)
+                local item = values.item
+                local amount = asNumber(values.amount) or 1
+                if target and type(item) == "string" and item ~= "" then
+                    -- Keep item as string key; this is what ox_inventory export AddItem expects.
+                    args = { target, item, amount }
+                end
+            elseif not hasPositionalArgs(args) then
+                args = {}
+            end
+        end
         return executeExport(template, args)
     end
     if actionType == "server_event" then
@@ -213,8 +279,22 @@ SetHttpHandler(function(req, res)
         end
 
         local okExec, message, result = executePayload(payload)
+        print(("[^3%s^7] action=%s ok=%s message=%s"):format(
+            RESOURCE_NAME,
+            tostring((payload.template or {}).action_name),
+            tostring(okExec),
+            tostring(message)
+        ))
         if not okExec then
-            return jsonResponse(res, 400, { ok = false, error = "execute_failed", message = message })
+            local errPayload = {
+                ok = false,
+                error = "execute_failed",
+                message = message,
+            }
+            if result ~= nil then
+                errPayload.result = result
+            end
+            return jsonResponse(res, 400, errPayload)
         end
         return jsonResponse(res, 200, { ok = true, message = message, result = result })
     end)

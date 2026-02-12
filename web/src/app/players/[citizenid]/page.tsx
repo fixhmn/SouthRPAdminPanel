@@ -70,6 +70,8 @@ type OnlineStatus = {
   player_name?: string | null;
 };
 
+const AUTO_VARIABLE_KEYS = new Set(["targetId", "target_id", "source", "static_id"]);
+
 function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return "-";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
@@ -273,7 +275,12 @@ export default function PlayerPage() {
     setGameActionStatus("");
     setErr("");
     try {
-      const values = gameActionValues[template.id] || {};
+      const rawValues = gameActionValues[template.id] || {};
+      const values: Record<string, string> = {};
+      for (const [k, v] of Object.entries(rawValues)) {
+        if (AUTO_VARIABLE_KEYS.has(k)) continue;
+        values[k] = v;
+      }
       await api(`/players/${cid}/game-actions/execute`, {
         method: "POST",
         body: JSON.stringify({
@@ -631,16 +638,20 @@ export default function PlayerPage() {
                                 {v.label || v.key}
                                 {v.required ? " *" : ""}
                               </label>
-                              <input
-                                className="input"
-                                value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
-                                onChange={(e) => setTemplateValue(tmpl.id, v.key, e.target.value)}
-                                placeholder={
-                                  v.default_value
-                                    ? `default: ${String(v.default_value)}`
-                                    : "Пусто = взять из профиля игрока"
-                                }
-                              />
+                              {AUTO_VARIABLE_KEYS.has(v.key) ? (
+                                <input className="input" value="Авто" disabled readOnly />
+                              ) : (
+                                <input
+                                  className="input"
+                                  value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
+                                  onChange={(e) => setTemplateValue(tmpl.id, v.key, e.target.value)}
+                                  placeholder={
+                                    v.default_value
+                                      ? `default: ${String(v.default_value)}`
+                                      : "Пусто = взять из профиля игрока"
+                                  }
+                                />
+                              )}
                             </div>
                           ))}
                         </div>
