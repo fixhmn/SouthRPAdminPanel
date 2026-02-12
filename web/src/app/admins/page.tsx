@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -130,10 +130,8 @@ export default function AdminsPage() {
   async function saveRole(roleName: string) {
     setBusy(true);
     setErr("");
-
     try {
       const permissions = roleDrafts[roleName] || [];
-
       await api(`/admin/roles/${encodeURIComponent(roleName)}`, {
         method: "PUT",
         body: JSON.stringify({ permissions }),
@@ -149,19 +147,13 @@ export default function AdminsPage() {
   function toggleRolePermission(roleName: string, permission: string) {
     setRoleDrafts((prev) => {
       const current = new Set(prev[roleName] || []);
-      if (current.has(permission)) {
-        current.delete(permission);
-      } else {
-        current.add(permission);
-      }
+      if (current.has(permission)) current.delete(permission);
+      else current.add(permission);
 
       if (permission === "*" && current.has("*")) {
         return { ...prev, [roleName]: ["*"] };
       }
-
-      if (permission !== "*") {
-        current.delete("*");
-      }
+      if (permission !== "*") current.delete("*");
 
       return { ...prev, [roleName]: Array.from(current).sort() };
     });
@@ -170,7 +162,6 @@ export default function AdminsPage() {
   async function patchAdmin(id: number, patch: { role_name?: string; is_active?: boolean }) {
     setBusy(true);
     setErr("");
-
     try {
       await api(`/admin/admins/${id}`, {
         method: "PATCH",
@@ -187,7 +178,7 @@ export default function AdminsPage() {
   async function saveDiscordAssignment() {
     const idStr = assignDiscordId.trim();
     if (!/^\d+$/.test(idStr)) {
-      setErr("Ð£ÐºÐ°Ð¶Ð¸ ÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ñ‹Ð¹ Discord ID");
+      setErr("Укажи корректный Discord ID");
       return;
     }
 
@@ -217,11 +208,11 @@ export default function AdminsPage() {
     <main className="container">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <div>
-          <h1 className="title">Ð”Ð¾ÑÑ‚ÑƒÐ¿ Ð°Ð´Ð¼Ð¸Ð½Ð¾Ð²</h1>
-          <div className="muted">{me ? `Ð’Ñ‹ Ð²Ð¾ÑˆÐ»Ð¸ ÐºÐ°Ðº: ${me.login} (${roleLabel(me.role_name)})` : "Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°..."}</div>
+          <h1 className="title">Доступ админов</h1>
+          <div className="muted">{me ? `Вы вошли как: ${me.login} (${roleLabel(me.role_name)})` : "Загрузка..."}</div>
         </div>
         <Link className="btn secondary" href="/players">
-          Ðš ÑÐ¿Ð¸ÑÐºÑƒ Ð¸Ð³Ñ€Ð¾ÐºÐ¾Ð²
+          К списку игроков
         </Link>
       </div>
 
@@ -229,14 +220,14 @@ export default function AdminsPage() {
 
       {!can(me, "admins.manage") ? (
         <section className="card" style={{ marginTop: 14 }}>
-          <h3>ÐÐµÑ‚ Ð´Ð¾ÑÑ‚ÑƒÐ¿Ð°</h3>
-          <p>Ð¢Ñ€ÐµÐ±ÑƒÐµÑ‚ÑÑ permission `admins.manage`.</p>
+          <h3>Нет доступа</h3>
+          <p>Требуется permission `admins.manage`.</p>
         </section>
       ) : (
         <>
           <section className="card" style={{ marginTop: 14 }}>
-            <h3>Ð’Ñ‹Ð´Ð°Ñ‡Ð° Ñ€Ð¾Ð»Ð¸ Ð¿Ð¾ Discord ID</h3>
-            <div className="small">Ð”Ð¾Ð±Ð°Ð²ÑŒ Discord ID, ÑƒÐºÐ°Ð¶Ð¸ login (Ð¾Ð¿Ñ†Ð¸Ð¾Ð½Ð°Ð»ÑŒÐ½Ð¾) Ð¸ Ñ€Ð¾Ð»ÑŒ Ð´Ð»Ñ Ð²Ñ…Ð¾Ð´Ð° Ñ‡ÐµÑ€ÐµÐ· Discord OAuth.</div>
+            <h3>Выдача роли по Discord ID</h3>
+            <div className="small">Добавь Discord ID, укажи login (опционально) и роль для входа через Discord OAuth.</div>
             <div className="row" style={{ flexWrap: "wrap", marginTop: 10 }}>
               <input
                 className="input"
@@ -247,7 +238,7 @@ export default function AdminsPage() {
               />
               <input
                 className="input"
-                placeholder="login (Ð¾Ð¿Ñ†Ð¸Ð¾Ð½Ð°Ð»ÑŒÐ½Ð¾)"
+                placeholder="login (опционально)"
                 value={assignLogin}
                 onChange={(e) => setAssignLogin(e.target.value)}
                 style={{ minWidth: 220 }}
@@ -264,7 +255,7 @@ export default function AdminsPage() {
                 active
               </label>
               <button className="btn" disabled={busy || assignDiscordId.trim().length < 5} onClick={saveDiscordAssignment}>
-                Ð¡Ð¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚ÑŒ
+                Сохранить
               </button>
             </div>
 
@@ -291,7 +282,7 @@ export default function AdminsPage() {
                   ))}
                   {discordAssignments.length === 0 && (
                     <tr>
-                      <td colSpan={5}>ÐÐµÑ‚ Ð·Ð°Ð¿Ð¸ÑÐµÐ¹</td>
+                      <td colSpan={5}>Нет записей</td>
                     </tr>
                   )}
                 </tbody>
@@ -301,7 +292,7 @@ export default function AdminsPage() {
 
           <section className="card" style={{ marginTop: 14 }}>
             <h3>Roles</h3>
-            <div className="small">Ð’Ñ‹Ð±ÐµÑ€Ð¸Ñ‚Ðµ permissions Ñ‡ÐµÑ€ÐµÐ· Ñ‡ÐµÐºÐ±Ð¾ÐºÑÑ‹ Ð¸ ÑÐ¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚Ðµ role.</div>
+            <div className="small">Выберите permissions через чекбоксы и сохраните роль.</div>
             <div className="grid" style={{ marginTop: 10 }}>
               {roles.map((role) => (
                 <article key={role.role_name} className="card">
@@ -329,7 +320,7 @@ export default function AdminsPage() {
                               <div>
                                 <div className="permCode">{permission}</div>
                                 <div className="small">
-                                  {PERMISSION_DESCRIPTIONS[permission] || "ÐžÐ¿Ð¸ÑÐ°Ð½Ð¸Ðµ Ð´Ð»Ñ permission Ð½Ðµ Ð·Ð°Ð´Ð°Ð½Ð¾."}
+                                  {PERMISSION_DESCRIPTIONS[permission] || "Описание для permission не задано."}
                                 </div>
                               </div>
                             </label>
@@ -341,7 +332,7 @@ export default function AdminsPage() {
 
                   <div style={{ marginTop: 10 }}>
                     <button className="btn" disabled={busy} onClick={() => saveRole(role.role_name)}>
-                      Ð¡Ð¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚ÑŒ permissions
+                      Сохранить permissions
                     </button>
                   </div>
                 </article>
@@ -350,7 +341,7 @@ export default function AdminsPage() {
           </section>
 
           <section className="card" style={{ marginTop: 14 }}>
-            <h3>ÐÐ´Ð¼Ð¸Ð½Ð¸ÑÑ‚Ñ€Ð°Ñ‚Ð¾Ñ€Ñ‹</h3>
+            <h3>Администраторы</h3>
             <div className="tableWrap">
               <table className="table">
                 <thead>
@@ -360,7 +351,7 @@ export default function AdminsPage() {
                     <th>Discord ID</th>
                     <th>Role</th>
                     <th>Active</th>
-                    <th>Ð”ÐµÐ¹ÑÑ‚Ð²Ð¸Ñ</th>
+                    <th>Действия</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -404,4 +395,3 @@ export default function AdminsPage() {
     </main>
   );
 }
-
