@@ -1505,7 +1505,9 @@ async def player_game_action_execute(
         value_type = str(var.get("value_type") or "string")
 
         raw = body.values.get(key)
-        if raw is None and key in player_ctx:
+        raw_is_empty = raw is None or raw == "" or (isinstance(raw, str) and raw.strip() == "")
+        # If UI sent empty value, allow auto-fill from player context.
+        if raw_is_empty and key in player_ctx:
             raw = player_ctx.get(key)
         if raw is None and var.get("default_value") not in (None, ""):
             raw = var.get("default_value")

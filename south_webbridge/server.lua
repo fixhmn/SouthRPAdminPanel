@@ -166,7 +166,11 @@ if getBridgeToken() == "" then
 end
 
 SetHttpHandler(function(req, res)
-    if req.path ~= "/south_webbridge/execute" and req.path ~= "/south_webbridge/status" then
+    local path = tostring(req.path or "")
+    local isExecute = (path == "/south_webbridge/execute" or path == "/execute")
+    local isStatus = (path == "/south_webbridge/status" or path == "/status")
+
+    if (not isExecute) and (not isStatus) then
         return jsonResponse(res, 404, { ok = false, error = "not_found" })
     end
 
@@ -195,7 +199,7 @@ SetHttpHandler(function(req, res)
             return jsonResponse(res, 400, { ok = false, error = "invalid_json" })
         end
 
-        if req.path == "/south_webbridge/status" then
+        if isStatus then
             local src = resolveTargetSource(payload)
             if src and GetPlayerName(src) then
                 return jsonResponse(res, 200, {
