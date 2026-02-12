@@ -428,9 +428,11 @@ export default function PlayerPage() {
     }
   }
 
-  async function checkOnlineStatus() {
+  const checkOnlineStatus = useCallback(async (silent = false) => {
     setCheckingOnline(true);
-    setErr("");
+    if (!silent) {
+      setErr("");
+    }
     try {
       const st = await api<OnlineStatus>(`/players/${cid}/online-status`);
       setOnlineStatus(st);
@@ -438,11 +440,23 @@ export default function PlayerPage() {
         setShowGamePanel(false);
       }
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (!silent) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setCheckingOnline(false);
     }
-  }
+  }, [cid]);
+
+  useEffect(() => {
+    if (!can(me, "players.game_interact")) return;
+    void checkOnlineStatus(true);
+
+    const timer = window.setInterval(() => {
+      void checkOnlineStatus(true);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [cid, me, checkOnlineStatus]);
 
   if (err && !player) {
     return (
@@ -517,15 +531,25 @@ export default function PlayerPage() {
           <h3>Действия</h3>
           {can(me, "players.game_interact") && (
             <div className="row" style={{ flexWrap: "wrap", marginTop: 8, marginBottom: 8 }}>
-              <button className="btn secondary" disabled={checkingOnline} onClick={checkOnlineStatus}>
+              <button className="btn secondary" disabled={checkingOnline} onClick={() => void checkOnlineStatus(false)}>
                 {checkingOnline ? "Проверка..." : "Проверить онлайн"}
               </button>
-              <div className="small">
+              <div
+                style={{
+                  fontWeight: 700,
+                  color:
+                    onlineStatus === null
+                      ? "#c7cfdd"
+                      : onlineStatus.online
+                        ? "#39d98a"
+                        : "#ff5f5f",
+                }}
+              >
                 {onlineStatus === null
-                  ? "Статус: не проверен"
+                  ? "Проверка статуса..."
                   : onlineStatus.online
-                    ? `Статус: онлайн (ID: ${String(onlineStatus.source ?? "-")})`
-                    : "Статус: оффлайн"}
+                    ? `Онлайн (ID ${String(onlineStatus.source ?? "-")})`
+                    : "Оффлайн"}
               </div>
             </div>
           )}
