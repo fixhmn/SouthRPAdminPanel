@@ -397,6 +397,33 @@ def _post_bridge_status(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(502, f"Bridge unavailable: {e}")
 
 
+def _post_bridge_online_list(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not BRIDGE_URL:
+        raise HTTPException(500, "BRIDGE_URL is not configured")
+    if not BRIDGE_TOKEN:
+        raise HTTPException(500, "BRIDGE_TOKEN is not configured")
+
+    url = _bridge_url_with_path("online-list")
+    data = json.dumps(payload or {}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    req.add_header("X-Bridge-Token", BRIDGE_TOKEN)
+    req.add_header("User-Agent", "SouthRPAdminBridge/1.0")
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("utf-8")
+        return json.loads(raw) if raw else {"ok": True, "items": []}
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail = ""
+        raise HTTPException(502, f"Bridge HTTP {e.code}: {detail or 'error'}")
+    except Exception as e:
+        raise HTTPException(502, f"Bridge unavailable: {e}")
+
+
 async def _get_player_bridge_context(pool, citizenid: str) -> dict[str, Any]:
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -720,6 +747,27 @@ async def players_search(
     admin: AdminContext = Depends(require_permission("players.read")),
 ):
     pool = await get_pool()
+    online_items: list[dict[str, Any]] = []
+    try:
+        online_payload = _post_bridge_online_list({})
+        raw_online = online_payload.get("items")
+        if isinstance(raw_online, list):
+            online_items = [x for x in raw_online if isinstance(x, dict)]
+    except HTTPException:
+        online_items = []
+
+    online_by_citizen: dict[str, dict[str, Any]] = {}
+    online_by_static: dict[int, dict[str, Any]] = {}
+    for row in online_items:
+        online_citizen = str(row.get("citizenid") or "").strip()
+        if online_citizen:
+            online_by_citizen[online_citizen] = row
+        static_val = row.get("static_id")
+        try:
+            if static_val is not None:
+                online_by_static[int(static_val)] = row
+        except Exception:
+            pass
 
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -815,15 +863,33 @@ async def players_search(
     out = []
     for p in players[:limit]:
         ci = _charinfo_to_dict(p.get("charinfo"))
+        citizen = str(p.get("citizenid") or "")
+        static_id_val = p.get("static_id")
+        same_online = online_by_citizen.get(citizen)
+        online_current_citizenid = citizen if same_online else None
+        online_source = same_online.get("source") if same_online else None
+        if not same_online:
+            try:
+                if static_id_val is not None:
+                    by_static = online_by_static.get(int(static_id_val))
+                    if by_static:
+                        online_current_citizenid = str(by_static.get("citizenid") or "") or None
+                        online_source = by_static.get("source")
+            except Exception:
+                pass
+
         out.append(
             {
-                "citizenid": p.get("citizenid"),
+                "citizenid": citizen,
                 "name": p.get("name"),
                 "static_id": p.get("static_id"),
                 "discord_id": p.get("discord_id"),
                 "firstname": ci.get("firstname"),
                 "lastname": ci.get("lastname"),
                 "phone": ci.get("phone"),
+                "online": bool(same_online),
+                "online_source": online_source,
+                "online_citizenid": online_current_citizenid,
             }
         )
 
@@ -839,49 +905,28 @@ async def players_online(
     limit: int = Query(100, ge=1, le=500),
     admin: AdminContext = Depends(require_permission("players.read")),
 ):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute(
-                f"""
-                SELECT p.citizenid, p.name, p.charinfo, p.license, s.static_id, s.discord_id
-                FROM players p
-                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
-                LIMIT 2000
-                """
-            )
-            rows = await cur.fetchall()
+    bridge = _post_bridge_online_list({})
+    raw_items = bridge.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = []
 
     online_items: list[dict[str, Any]] = []
-    for row in rows:
-        player_ctx = {
-            "citizenid": row.get("citizenid"),
-            "static_id": row.get("static_id"),
-            "license": row.get("license"),
-            "discord_id": row.get("discord_id"),
-            "name": row.get("name"),
-        }
-
-        try:
-            status = _post_bridge_status({"player": player_ctx})
-        except HTTPException:
+    for row in raw_items:
+        if not isinstance(row, dict):
             continue
-
-        source_id = status.get("source")
-        if not bool(status.get("online")) or source_id is None:
+        citizenid = str(row.get("citizenid") or "").strip()
+        if not citizenid:
             continue
-
-        ci = _charinfo_to_dict(row.get("charinfo"))
         online_items.append(
             {
-                "citizenid": row.get("citizenid"),
+                "citizenid": citizenid,
                 "name": row.get("name"),
                 "static_id": row.get("static_id"),
                 "discord_id": row.get("discord_id"),
-                "firstname": ci.get("firstname"),
-                "lastname": ci.get("lastname"),
-                "phone": ci.get("phone"),
-                "source": source_id,
+                "firstname": row.get("firstname"),
+                "lastname": row.get("lastname"),
+                "phone": row.get("phone"),
+                "source": row.get("source"),
             }
         )
         if len(online_items) >= limit:

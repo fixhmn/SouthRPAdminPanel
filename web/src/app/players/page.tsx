@@ -14,6 +14,9 @@ type SearchRes = {
     firstname?: string;
     lastname?: string;
     phone?: string;
+    online?: boolean;
+    online_source?: number;
+    online_citizenid?: string | null;
   }>;
 };
 
@@ -198,6 +201,30 @@ export default function Players() {
                 </div>
 
                 <div className="searchMetaGrid" style={{ marginTop: 8 }}>
+                  <div className="searchMetaLine">
+                    <span className="searchMetaKey">Онлайн</span>
+                    <div className="searchMetaValue">
+                      {p.online ? (
+                        <>
+                          Онлайн ID {String(p.online_source ?? "-")} (
+                          <Link className="link" href={`/players/${p.citizenid}`}>
+                            {p.citizenid}
+                          </Link>
+                          )
+                        </>
+                      ) : p.online_citizenid ? (
+                        <>
+                          Онлайн ID {String(p.online_source ?? "-")} (
+                          <Link className="link" href={`/players/${p.online_citizenid}`}>
+                            {p.online_citizenid}
+                          </Link>
+                          )
+                        </>
+                      ) : (
+                        "Оффлайн"
+                      )}
+                    </div>
+                  </div>
                   <div className="searchMetaLine">
                     <span className="searchMetaKey">Static ID</span>
                     <div className="searchMetaValue" title={String(p.static_id ?? "-")}>

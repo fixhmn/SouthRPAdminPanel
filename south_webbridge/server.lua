@@ -154,6 +154,33 @@ local function resolveTargetSource(payload)
         return sourceCandidate
     end
 
+    local citizenid = payload.player and payload.player.citizenid or nil
+    if type(citizenid) == "string" and citizenid ~= "" then
+        -- Try qbx_core export first.
+        local okByCitizen, byCitizen = pcall(function()
+            return exports.qbx_core and exports.qbx_core:GetPlayerByCitizenId(citizenid) or nil
+        end)
+        if okByCitizen and byCitizen then
+            local src = byCitizen.PlayerData and byCitizen.PlayerData.source or byCitizen.source
+            if src and GetPlayerName(src) then
+                return src
+            end
+        end
+
+        -- Fallback: iterate online players and match citizenid.
+        for _, srcStr in ipairs(GetPlayers()) do
+            local src = tonumber(srcStr)
+            if src then
+                local okGetPlayer, player = pcall(function()
+                    return exports.qbx_core and exports.qbx_core:GetPlayer(src) or nil
+                end)
+                if okGetPlayer and player and player.PlayerData and player.PlayerData.citizenid == citizenid then
+                    return src
+                end
+            end
+        end
+    end
+
     local staticId = payload.player and payload.player.static_id or nil
     if staticId ~= nil and tostring(staticId) ~= "" then
         local okStatic, srcByStatic = pcall(function()
@@ -161,35 +188,6 @@ local function resolveTargetSource(payload)
         end)
         if okStatic and srcByStatic and GetPlayerName(srcByStatic) then
             return srcByStatic
-        end
-    end
-
-    local citizenid = payload.player and payload.player.citizenid or nil
-    if type(citizenid) ~= "string" or citizenid == "" then
-        return nil
-    end
-
-    -- Try qbx_core export first.
-    local okByCitizen, byCitizen = pcall(function()
-        return exports.qbx_core and exports.qbx_core:GetPlayerByCitizenId(citizenid) or nil
-    end)
-    if okByCitizen and byCitizen then
-        local src = byCitizen.PlayerData and byCitizen.PlayerData.source or byCitizen.source
-        if src and GetPlayerName(src) then
-            return src
-        end
-    end
-
-    -- Fallback: iterate online players and match citizenid.
-    for _, srcStr in ipairs(GetPlayers()) do
-        local src = tonumber(srcStr)
-        if src then
-            local okGetPlayer, player = pcall(function()
-                return exports.qbx_core and exports.qbx_core:GetPlayer(src) or nil
-            end)
-            if okGetPlayer and player and player.PlayerData and player.PlayerData.citizenid == citizenid then
-                return src
-            end
         end
     end
 
