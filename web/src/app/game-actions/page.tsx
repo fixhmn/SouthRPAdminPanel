@@ -16,7 +16,7 @@ type TemplateRow = {
   id: number;
   name: string;
   description?: string | null;
-  action_type: "export" | "server_event" | "qbx_set_job";
+  action_type: "export" | "server_event" | "qbx_set_job" | "qbx_set_gang";
   resource_name?: string | null;
   action_name: string;
   variables: VariableDef[];
@@ -32,7 +32,7 @@ type TemplatesRes = {
 type NewTemplateForm = {
   name: string;
   description: string;
-  action_type: "export" | "server_event" | "qbx_set_job";
+  action_type: "export" | "server_event" | "qbx_set_job" | "qbx_set_gang";
   resource_name: string;
   action_name: string;
   variables_json: string;
@@ -211,6 +211,7 @@ export default function GameActionsPage() {
                     <option value="export">export</option>
                     <option value="server_event">server_event</option>
                     <option value="qbx_set_job">qbx_set_job</option>
+                    <option value="qbx_set_gang">qbx_set_gang</option>
                   </select>
                 </div>
                 <div>
@@ -327,4 +328,3 @@ export default function GameActionsPage() {
     </main>
   );
 }
-

@@ -56,7 +56,7 @@ type GameActionTemplate = {
   id: number;
   name: string;
   description?: string | null;
-  action_type: "export" | "server_event" | "qbx_set_job";
+  action_type: "export" | "server_event" | "qbx_set_job" | "qbx_set_gang";
   resource_name?: string | null;
   action_name: string;
   variables: GameActionVariable[];
@@ -68,6 +68,23 @@ type ItemSuggestion = {
   label: string;
   image?: string | null;
   image_url?: string | null;
+};
+
+type JobSuggestion = {
+  job: string;
+  label: string;
+  grades_count?: number;
+};
+
+type GangSuggestion = {
+  gang: string;
+  label: string;
+  grades_count?: number;
+};
+
+type GradeSuggestion = {
+  grade: number;
+  name: string;
 };
 
 type OnlineStatus = {
@@ -124,6 +141,11 @@ export default function PlayerPage() {
   const [checkingOnline, setCheckingOnline] = useState(false);
   const [itemSuggestions, setItemSuggestions] = useState<Record<string, ItemSuggestion[]>>({});
   const [itemSuggestBusy, setItemSuggestBusy] = useState<Record<string, boolean>>({});
+  const [jobSuggestions, setJobSuggestions] = useState<Record<string, JobSuggestion[]>>({});
+  const [gangSuggestions, setGangSuggestions] = useState<Record<string, GangSuggestion[]>>({});
+  const [groupSuggestBusy, setGroupSuggestBusy] = useState<Record<string, boolean>>({});
+  const [gradeOptions, setGradeOptions] = useState<Record<number, GradeSuggestion[]>>({});
+  const [gradeBusy, setGradeBusy] = useState<Record<number, boolean>>({});
 
   const load = useCallback(async () => {
     setErr("");
@@ -297,6 +319,82 @@ export default function PlayerPage() {
       setItemSuggestions((prev) => ({ ...prev, [stateKey]: [] }));
     } finally {
       setItemSuggestBusy((prev) => ({ ...prev, [stateKey]: false }));
+    }
+  }
+
+  async function searchJobSuggestions(templateId: number, variableKey: string, q: string) {
+    const stateKey = getItemSuggestKey(templateId, variableKey);
+    const needle = q.trim();
+    if (!needle) {
+      setJobSuggestions((prev) => ({ ...prev, [stateKey]: [] }));
+      return;
+    }
+    setGroupSuggestBusy((prev) => ({ ...prev, [stateKey]: true }));
+    try {
+      const res = await api<{ items: JobSuggestion[] }>(`/jobs/suggest?q=${encodeURIComponent(needle)}&limit=8`);
+      setJobSuggestions((prev) => ({ ...prev, [stateKey]: res.items || [] }));
+    } catch {
+      setJobSuggestions((prev) => ({ ...prev, [stateKey]: [] }));
+    } finally {
+      setGroupSuggestBusy((prev) => ({ ...prev, [stateKey]: false }));
+    }
+  }
+
+  async function searchGangSuggestions(templateId: number, variableKey: string, q: string) {
+    const stateKey = getItemSuggestKey(templateId, variableKey);
+    const needle = q.trim();
+    if (!needle) {
+      setGangSuggestions((prev) => ({ ...prev, [stateKey]: [] }));
+      return;
+    }
+    setGroupSuggestBusy((prev) => ({ ...prev, [stateKey]: true }));
+    try {
+      const res = await api<{ items: GangSuggestion[] }>(`/gangs/suggest?q=${encodeURIComponent(needle)}&limit=8`);
+      setGangSuggestions((prev) => ({ ...prev, [stateKey]: res.items || [] }));
+    } catch {
+      setGangSuggestions((prev) => ({ ...prev, [stateKey]: [] }));
+    } finally {
+      setGroupSuggestBusy((prev) => ({ ...prev, [stateKey]: false }));
+    }
+  }
+
+  async function loadGradeOptions(template: GameActionTemplate, values: Record<string, string>) {
+    const templateId = template.id;
+    const hasJob = (template.variables || []).some((x) => x.key === "job");
+    const hasGang = (template.variables || []).some((x) => x.key === "gang");
+    const selectedJob = (values.job || "").trim();
+    const selectedGang = (values.gang || "").trim();
+
+    if (!hasJob && !hasGang) {
+      setGradeOptions((prev) => ({ ...prev, [templateId]: [] }));
+      return;
+    }
+    if (hasJob && !selectedJob) {
+      setGradeOptions((prev) => ({ ...prev, [templateId]: [] }));
+      return;
+    }
+    if (!hasJob && hasGang && !selectedGang) {
+      setGradeOptions((prev) => ({ ...prev, [templateId]: [] }));
+      return;
+    }
+
+    setGradeBusy((prev) => ({ ...prev, [templateId]: true }));
+    try {
+      if (hasJob) {
+        const res = await api<{ items: GradeSuggestion[] }>(
+          `/jobs/${encodeURIComponent(selectedJob)}/grades`,
+        );
+        setGradeOptions((prev) => ({ ...prev, [templateId]: res.items || [] }));
+      } else {
+        const res = await api<{ items: GradeSuggestion[] }>(
+          `/gangs/${encodeURIComponent(selectedGang)}/grades`,
+        );
+        setGradeOptions((prev) => ({ ...prev, [templateId]: res.items || [] }));
+      }
+    } catch {
+      setGradeOptions((prev) => ({ ...prev, [templateId]: [] }));
+    } finally {
+      setGradeBusy((prev) => ({ ...prev, [templateId]: false }));
     }
   }
 
@@ -730,6 +828,166 @@ export default function PlayerPage() {
                                       Поиск...
                                     </div>
                                   )}
+                                </div>
+                              ) : v.key === "job" ? (
+                                <div>
+                                  <input
+                                    className="input"
+                                    value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
+                                    onChange={(e) => {
+                                      const next = e.target.value;
+                                      setTemplateValue(tmpl.id, v.key, next);
+                                      void searchJobSuggestions(tmpl.id, v.key, next);
+                                    }}
+                                    placeholder="Введите job label или key"
+                                  />
+                                  {(jobSuggestions[getItemSuggestKey(tmpl.id, v.key)] || []).length > 0 && (
+                                    <div
+                                      style={{
+                                        border: "1px solid #2c3850",
+                                        borderRadius: 8,
+                                        marginTop: 6,
+                                        maxHeight: 180,
+                                        overflowY: "auto",
+                                        background: "#101726",
+                                      }}
+                                    >
+                                      {(jobSuggestions[getItemSuggestKey(tmpl.id, v.key)] || []).map((s) => (
+                                        <button
+                                          key={`${tmpl.id}-${v.key}-${s.job}`}
+                                          type="button"
+                                          onClick={() => {
+                                            const nextValues = {
+                                              ...(gameActionValues[tmpl.id] || {}),
+                                              [v.key]: s.job,
+                                            };
+                                            setGameActionValues((prev) => ({ ...prev, [tmpl.id]: nextValues }));
+                                            setJobSuggestions((prev) => ({
+                                              ...prev,
+                                              [getItemSuggestKey(tmpl.id, v.key)]: [],
+                                            }));
+                                            void loadGradeOptions(tmpl, nextValues);
+                                          }}
+                                          style={{
+                                            display: "block",
+                                            width: "100%",
+                                            textAlign: "left",
+                                            padding: "8px 10px",
+                                            border: "none",
+                                            borderBottom: "1px solid #1a2438",
+                                            background: "transparent",
+                                            color: "inherit",
+                                            cursor: "pointer",
+                                          }}
+                                        >
+                                          {s.label} <span className="muted">({s.job})</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {groupSuggestBusy[getItemSuggestKey(tmpl.id, v.key)] && (
+                                    <div className="small" style={{ marginTop: 4 }}>
+                                      Поиск...
+                                    </div>
+                                  )}
+                                </div>
+                              ) : v.key === "gang" ? (
+                                <div>
+                                  <input
+                                    className="input"
+                                    value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
+                                    onChange={(e) => {
+                                      const next = e.target.value;
+                                      setTemplateValue(tmpl.id, v.key, next);
+                                      void searchGangSuggestions(tmpl.id, v.key, next);
+                                    }}
+                                    placeholder="Введите gang label или key"
+                                  />
+                                  {(gangSuggestions[getItemSuggestKey(tmpl.id, v.key)] || []).length > 0 && (
+                                    <div
+                                      style={{
+                                        border: "1px solid #2c3850",
+                                        borderRadius: 8,
+                                        marginTop: 6,
+                                        maxHeight: 180,
+                                        overflowY: "auto",
+                                        background: "#101726",
+                                      }}
+                                    >
+                                      {(gangSuggestions[getItemSuggestKey(tmpl.id, v.key)] || []).map((s) => (
+                                        <button
+                                          key={`${tmpl.id}-${v.key}-${s.gang}`}
+                                          type="button"
+                                          onClick={() => {
+                                            const nextValues = {
+                                              ...(gameActionValues[tmpl.id] || {}),
+                                              [v.key]: s.gang,
+                                            };
+                                            setGameActionValues((prev) => ({ ...prev, [tmpl.id]: nextValues }));
+                                            setGangSuggestions((prev) => ({
+                                              ...prev,
+                                              [getItemSuggestKey(tmpl.id, v.key)]: [],
+                                            }));
+                                            void loadGradeOptions(tmpl, nextValues);
+                                          }}
+                                          style={{
+                                            display: "block",
+                                            width: "100%",
+                                            textAlign: "left",
+                                            padding: "8px 10px",
+                                            border: "none",
+                                            borderBottom: "1px solid #1a2438",
+                                            background: "transparent",
+                                            color: "inherit",
+                                            cursor: "pointer",
+                                          }}
+                                        >
+                                          {s.label} <span className="muted">({s.gang})</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {groupSuggestBusy[getItemSuggestKey(tmpl.id, v.key)] && (
+                                    <div className="small" style={{ marginTop: 4 }}>
+                                      Поиск...
+                                    </div>
+                                  )}
+                                </div>
+                              ) : v.key === "grade" ? (
+                                <div>
+                                  {((gradeOptions[tmpl.id] || []).length > 0) ? (
+                                    <select
+                                      className="input"
+                                      value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
+                                      onChange={(e) => setTemplateValue(tmpl.id, v.key, e.target.value)}
+                                    >
+                                      <option value="">Выберите grade</option>
+                                      {(gradeOptions[tmpl.id] || []).map((g) => (
+                                        <option key={`${tmpl.id}-grade-${g.grade}`} value={String(g.grade)}>
+                                          {g.name} ({g.grade})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      className="input"
+                                      value={gameActionValues[tmpl.id]?.[v.key] ?? ""}
+                                      onChange={(e) => setTemplateValue(tmpl.id, v.key, e.target.value)}
+                                      placeholder="Сначала выберите job/gang"
+                                    />
+                                  )}
+                                  <div style={{ marginTop: 6 }}>
+                                    <button
+                                      type="button"
+                                      className="btn secondary"
+                                      onClick={() =>
+                                        void loadGradeOptions(tmpl, gameActionValues[tmpl.id] || {})
+                                      }
+                                      disabled={Boolean(gradeBusy[tmpl.id])}
+                                    >
+                                      {gradeBusy[tmpl.id] ? "Загрузка grades..." : "Обновить grades"}
+                                    </button>
+                                  </div>
                                 </div>
                               ) : (
                                 <input

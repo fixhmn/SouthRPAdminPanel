@@ -171,13 +171,51 @@ local function executeQbxSetJob(payload)
         return false, "player.Functions.SetJob is unavailable", nil
     end
 
-    local okSet, errSet = pcall(function()
-        player.Functions.SetJob(tostring(job), tonumber(grade) or 0)
+    local okSet, setResult = pcall(function()
+        return player.Functions.SetJob(tostring(job), tonumber(grade) or 0)
     end)
     if not okSet then
-        return false, tostring(errSet), nil
+        return false, tostring(setResult), nil
+    end
+    if setResult == false then
+        return false, "SetJob returned false (invalid job/grade)", nil
     end
     return true, "job updated", { source = targetSource, job = tostring(job), grade = tonumber(grade) or 0 }
+end
+
+local function executeQbxSetGang(payload)
+    local values = payload.values or {}
+    local gang = values.gang or values.Gang
+    local grade = asNumber(values.grade) or asNumber(values.Grade) or 0
+    local targetSource = resolveTargetSource(payload)
+
+    if type(gang) ~= "string" or gang == "" then
+        return false, "gang variable is required", nil
+    end
+    if not targetSource then
+        return false, "target source is not resolved (player should be online)", nil
+    end
+
+    local okPlayer, player = pcall(function()
+        return exports.qbx_core and exports.qbx_core:GetPlayer(targetSource) or nil
+    end)
+    if not okPlayer or not player then
+        return false, "qbx player object not found", nil
+    end
+    if not (player.Functions and player.Functions.SetGang) then
+        return false, "player.Functions.SetGang is unavailable", nil
+    end
+
+    local okSet, setResult = pcall(function()
+        return player.Functions.SetGang(tostring(gang), tonumber(grade) or 0)
+    end)
+    if not okSet then
+        return false, tostring(setResult), nil
+    end
+    if setResult == false then
+        return false, "SetGang returned false (invalid gang/grade)", nil
+    end
+    return true, "gang updated", { source = targetSource, gang = tostring(gang), grade = tonumber(grade) or 0 }
 end
 
 local function executePayload(payload)
@@ -222,6 +260,9 @@ local function executePayload(payload)
     end
     if actionType == "qbx_set_job" then
         return executeQbxSetJob(payload)
+    end
+    if actionType == "qbx_set_gang" then
+        return executeQbxSetGang(payload)
     end
 
     return false, ("unsupported action_type: %s"):format(tostring(actionType)), nil

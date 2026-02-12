@@ -24,6 +24,7 @@ from auth import (
 )
 from db import get_pool
 from items_catalog import get_items_catalog, resolve_item_image, resolve_item_label
+from jobs_gangs_catalog import get_gangs_catalog, get_jobs_catalog
 from utils import license_tail
 
 UTC = timezone.utc
@@ -131,7 +132,7 @@ class GameActionVariableBody(BaseModel):
 class GameActionTemplateCreateBody(BaseModel):
     name: str = Field(min_length=2, max_length=96)
     description: str | None = Field(default=None, max_length=512)
-    action_type: str = Field(pattern="^(export|server_event|qbx_set_job)$")
+    action_type: str = Field(pattern="^(export|server_event|qbx_set_job|qbx_set_gang)$")
     resource_name: str | None = Field(default=None, max_length=64)
     action_name: str = Field(min_length=1, max_length=128)
     variables: list[GameActionVariableBody] = Field(default_factory=list)
@@ -141,7 +142,7 @@ class GameActionTemplateCreateBody(BaseModel):
 class GameActionTemplatePatchBody(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=96)
     description: str | None = Field(default=None, max_length=512)
-    action_type: str | None = Field(default=None, pattern="^(export|server_event|qbx_set_job)$")
+    action_type: str | None = Field(default=None, pattern="^(export|server_event|qbx_set_job|qbx_set_gang)$")
     resource_name: str | None = Field(default=None, max_length=64)
     action_name: str | None = Field(default=None, min_length=1, max_length=128)
     variables: list[GameActionVariableBody] | None = None
@@ -220,6 +221,23 @@ def _normalize_item_key(v: str | None) -> str:
 
 def _normalize_search_text(v: str | None) -> str:
     return (v or "").strip().lower()
+
+
+def _sorted_grade_items(raw_grades: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not isinstance(raw_grades, list):
+        return out
+    for row in raw_grades:
+        if not isinstance(row, dict):
+            continue
+        try:
+            grade_num = int(row.get("grade"))
+        except Exception:
+            continue
+        grade_name = str(row.get("name") or grade_num)
+        out.append({"grade": grade_num, "name": grade_name})
+    out.sort(key=lambda x: x["grade"])
+    return out
 
 
 def _clean_template_variables(variables: list[GameActionVariableBody] | None) -> list[dict[str, Any]]:
@@ -1502,6 +1520,94 @@ async def items_suggest(
             break
 
     return {"items": out}
+
+
+@app.get("/jobs/suggest")
+async def jobs_suggest(
+    q: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(10, ge=1, le=50),
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    del admin
+    needle = _normalize_search_text(q)
+    out: list[dict[str, Any]] = []
+    catalog = get_jobs_catalog()
+    if not catalog:
+        return {"items": out}
+
+    for job_key, meta in catalog.items():
+        key = _normalize_item_key(job_key)
+        label = str((meta or {}).get("label") or job_key)
+        if needle not in _normalize_search_text(key) and needle not in _normalize_search_text(label):
+            continue
+        grades = _sorted_grade_items((meta or {}).get("grades"))
+        out.append({"job": key, "label": label, "grades_count": len(grades)})
+        if len(out) >= limit:
+            break
+    return {"items": out}
+
+
+@app.get("/gangs/suggest")
+async def gangs_suggest(
+    q: str = Query(..., min_length=1, max_length=128),
+    limit: int = Query(10, ge=1, le=50),
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    del admin
+    needle = _normalize_search_text(q)
+    out: list[dict[str, Any]] = []
+    catalog = get_gangs_catalog()
+    if not catalog:
+        return {"items": out}
+
+    for gang_key, meta in catalog.items():
+        key = _normalize_item_key(gang_key)
+        label = str((meta or {}).get("label") or gang_key)
+        if needle not in _normalize_search_text(key) and needle not in _normalize_search_text(label):
+            continue
+        grades = _sorted_grade_items((meta or {}).get("grades"))
+        out.append({"gang": key, "label": label, "grades_count": len(grades)})
+        if len(out) >= limit:
+            break
+    return {"items": out}
+
+
+@app.get("/jobs/{job_key}/grades")
+async def jobs_grades(
+    job_key: str,
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    del admin
+    key = _normalize_item_key(job_key)
+    meta = None
+    for raw_key, raw_meta in get_jobs_catalog().items():
+        if _normalize_item_key(raw_key) == key:
+            meta = raw_meta
+            break
+    if not meta:
+        raise HTTPException(404, "Job not found")
+    label = str((meta or {}).get("label") or key)
+    grades = _sorted_grade_items((meta or {}).get("grades"))
+    return {"job": key, "label": label, "items": grades}
+
+
+@app.get("/gangs/{gang_key}/grades")
+async def gangs_grades(
+    gang_key: str,
+    admin: AdminContext = Depends(require_permission("players.game_interact")),
+):
+    del admin
+    key = _normalize_item_key(gang_key)
+    meta = None
+    for raw_key, raw_meta in get_gangs_catalog().items():
+        if _normalize_item_key(raw_key) == key:
+            meta = raw_meta
+            break
+    if not meta:
+        raise HTTPException(404, "Gang not found")
+    label = str((meta or {}).get("label") or key)
+    grades = _sorted_grade_items((meta or {}).get("grades"))
+    return {"gang": key, "label": label, "items": grades}
 
 
 @app.post("/players/{citizenid}/game-actions/debug-additem")
