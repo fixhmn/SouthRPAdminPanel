@@ -463,46 +463,133 @@ async def _enrich_rows_with_static_id_by_license_tails(pool, rows: list[dict[str
     if not missing_rows:
         return
 
+    def _extract_user_id(row: dict[str, Any]) -> int | None:
+        for key in ("userId", "userid", "UserID", "user_id"):
+            raw = row.get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                return int(raw)
+            except Exception:
+                continue
+        return None
+
+    def _collect_tails(row: dict[str, Any]) -> list[str]:
+        out: list[str] = []
+        for raw in (row.get("license"), row.get("license2")):
+            tail = license_tail(raw)
+            if tail:
+                out.append(tail)
+        return out
+
+    def _load_tail_to_static_map(tails_to_query: set[str]) -> dict[str, int]:
+        if not tails_to_query:
+            return {}
+        placeholders = ",".join(["%s"] * len(tails_to_query))
+        tail_to_static: dict[str, int] = {}
+        # small local async helper inside function scope
+        async def _query() -> None:
+            async with pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        f"""
+                        SELECT static_id, SUBSTRING_INDEX(license, ':', -1) AS license_tail
+                        FROM static_ids
+                        WHERE SUBSTRING_INDEX(license, ':', -1) IN ({placeholders})
+                        """,
+                        tuple(sorted(tails_to_query)),
+                    )
+                    static_rows = await cur.fetchall()
+            for row in static_rows:
+                tail = str(row.get("license_tail") or "").strip()
+                static_val = row.get("static_id")
+                if not tail or static_val is None or tail in tail_to_static:
+                    continue
+                try:
+                    tail_to_static[tail] = int(static_val)
+                except Exception:
+                    continue
+        # run inner async block
+        # ruff: noqa: F821 (runtime-defined in closure)
+        return _query, tail_to_static
+
     tails: set[str] = set()
     for row in missing_rows:
-        t1 = license_tail(row.get("license"))
-        t2 = license_tail(row.get("license2"))
-        if t1:
-            tails.add(t1)
-        if t2:
-            tails.add(t2)
-    if not tails:
+        for tail in _collect_tails(row):
+            tails.add(tail)
+
+    tail_to_static: dict[str, int] = {}
+    if tails:
+        _query, _map = _load_tail_to_static_map(tails)
+        await _query()
+        tail_to_static.update(_map)
+
+    for row in missing_rows:
+        for t in _collect_tails(row):
+            if not t:
+                continue
+            resolved = tail_to_static.get(t)
+            if resolved is not None:
+                row["static_id"] = resolved
+                break
+
+    still_missing: list[dict[str, Any]] = [r for r in missing_rows if r.get("static_id") is None]
+    if not still_missing:
         return
 
-    placeholders = ",".join(["%s"] * len(tails))
-    tail_to_static: dict[str, int] = {}
+    user_ids: set[int] = set()
+    for row in still_missing:
+        uid = _extract_user_id(row)
+        if uid is not None:
+            user_ids.add(uid)
+    if not user_ids:
+        return
+
+    placeholders = ",".join(["%s"] * len(user_ids))
+    users_by_id: dict[int, dict[str, Any]] = {}
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
                 f"""
-                SELECT static_id, SUBSTRING_INDEX(license, ':', -1) AS license_tail
-                FROM static_ids
-                WHERE SUBSTRING_INDEX(license, ':', -1) IN ({placeholders})
+                SELECT userId, license, license2
+                FROM users
+                WHERE userId IN ({placeholders})
                 """,
-                tuple(sorted(tails)),
+                tuple(sorted(user_ids)),
             )
-            static_rows = await cur.fetchall()
+            users_rows = await cur.fetchall()
 
-    for row in static_rows:
-        tail = str(row.get("license_tail") or "").strip()
-        static_val = row.get("static_id")
-        if not tail or static_val is None or tail in tail_to_static:
-            continue
+    for row in users_rows:
         try:
-            tail_to_static[tail] = int(static_val)
+            uid = int(row.get("userId"))
+            users_by_id[uid] = row
         except Exception:
             continue
 
-    for row in missing_rows:
-        for t in (license_tail(row.get("license")), license_tail(row.get("license2"))):
-            if not t:
+    extra_tails: set[str] = set()
+    for row in still_missing:
+        uid = _extract_user_id(row)
+        u = users_by_id.get(uid) if uid is not None else None
+        if not u:
+            continue
+        for tail in (license_tail(u.get("license")), license_tail(u.get("license2"))):
+            if tail and tail not in tail_to_static:
+                extra_tails.add(tail)
+
+    if extra_tails:
+        _query2, _map2 = _load_tail_to_static_map(extra_tails)
+        await _query2()
+        tail_to_static.update(_map2)
+
+    for row in still_missing:
+        uid = _extract_user_id(row)
+        u = users_by_id.get(uid) if uid is not None else None
+        if not u:
+            continue
+        for tail in (license_tail(u.get("license")), license_tail(u.get("license2"))):
+            if not tail:
                 continue
-            resolved = tail_to_static.get(t)
+            resolved = tail_to_static.get(tail)
             if resolved is not None:
                 row["static_id"] = resolved
                 break
