@@ -182,6 +182,7 @@ export default function InventoryGameLogsPage() {
   const [offset, setOffset] = useState(0);
   const [action, setAction] = useState("");
   const [player, setPlayer] = useState("");
+  const [player2, setPlayer2] = useState("");
   const [item, setItem] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -205,6 +206,7 @@ export default function InventoryGameLogsPage() {
       qs.set("offset", String(off));
       if (action.trim()) qs.set("action", action.trim());
       if (player.trim()) qs.set("player", player.trim());
+      if (player2.trim()) qs.set("player2", player2.trim());
       if (item.trim()) qs.set("item", item.trim());
       if (dateFrom.trim()) qs.set("date_from", dateFrom.trim());
       if (dateTo.trim()) qs.set("date_to", dateTo.trim());
@@ -227,12 +229,29 @@ export default function InventoryGameLogsPage() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const p1 = (params.get("player") || "").trim();
+    const p2 = (params.get("player2") || "").trim();
+    const presetAction = (params.get("action") || "").trim();
+    if (p1) setPlayer(p1);
+    if (p2) setPlayer2(p2);
+    if (presetAction) setAction(presetAction);
+    if (p1 || p2 || presetAction) {
+      const timer = setTimeout(() => {
+        void load(0);
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!autoRefresh) return;
     const timer = setInterval(() => {
       void load(offset, true);
     }, 5000);
     return () => clearInterval(timer);
-  }, [autoRefresh, offset, limit, action, player, item, dateFrom, dateTo, sort]);
+  }, [autoRefresh, offset, limit, action, player, player2, item, dateFrom, dateTo, sort]);
 
   const totalPages = useMemo(() => {
     if (!data) return 1;
@@ -304,6 +323,23 @@ export default function InventoryGameLogsPage() {
                   placeholder="Имя / citizenid / static_id"
                   value={player}
                   onChange={(e) => setPlayer(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void load(0);
+                    }
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="small" htmlFor="inv-player2">Второй игрок</label>
+                <input
+                  id="inv-player2"
+                  className="input"
+                  placeholder="Имя / citizenid / static_id"
+                  value={player2}
+                  onChange={(e) => setPlayer2(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();

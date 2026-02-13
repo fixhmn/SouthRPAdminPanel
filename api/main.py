@@ -2870,6 +2870,7 @@ async def game_logs_inventory(
     offset: int = Query(0, ge=0, le=50000),
     action: str | None = Query(default=None, max_length=64),
     player: str | None = Query(default=None, max_length=128),
+    player2: str | None = Query(default=None, max_length=128),
     item: str | None = Query(default=None, max_length=128),
     date_from: str | None = Query(default=None, max_length=32),
     date_to: str | None = Query(default=None, max_length=32),
@@ -2886,17 +2887,76 @@ async def game_logs_inventory(
         where.append("action_key = %s")
         args.append(action.strip())
 
-    player_q = (player or "").strip()
-    if player_q:
-        like = f"%{player_q}%"
-        where.append(
+    def _build_side_match_expr(qtext: str, actor_prefix: str, target_prefix: str) -> tuple[str, list[Any]]:
+        q_clean = qtext.strip()
+        params: list[Any] = []
+        if q_clean.isdigit():
+            q_num = int(q_clean)
+            expr = (
+                "("
+                f"{actor_prefix}_static_id = %s OR {target_prefix}_static_id = %s OR "
+                f"{actor_prefix}_source = %s OR {target_prefix}_source = %s OR "
+                f"{actor_prefix}_citizenid = %s OR {target_prefix}_citizenid = %s"
+                ")"
+            )
+            params.extend([q_num, q_num, q_num, q_num, q_clean, q_clean])
+            return expr, params
+
+        like = f"%{q_clean}%"
+        expr = (
             "("
-            "actor_name LIKE %s OR target_name LIKE %s OR "
-            "actor_citizenid LIKE %s OR target_citizenid LIKE %s OR "
-            "CAST(actor_static_id AS CHAR) LIKE %s OR CAST(target_static_id AS CHAR) LIKE %s"
+            f"{actor_prefix}_name LIKE %s OR {target_prefix}_name LIKE %s OR "
+            f"{actor_prefix}_citizenid LIKE %s OR {target_prefix}_citizenid LIKE %s OR "
+            f"CAST({actor_prefix}_static_id AS CHAR) LIKE %s OR CAST({target_prefix}_static_id AS CHAR) LIKE %s"
             ")"
         )
-        args.extend([like, like, like, like, like, like])
+        params.extend([like, like, like, like, like, like])
+        return expr, params
+
+    def _build_actor_target_match_expr(qtext: str, side: str) -> tuple[str, list[Any]]:
+        q_clean = qtext.strip()
+        if q_clean.isdigit():
+            q_num = int(q_clean)
+            expr = (
+                "("
+                f"{side}_static_id = %s OR "
+                f"{side}_source = %s OR "
+                f"{side}_citizenid = %s"
+                ")"
+            )
+            return expr, [q_num, q_num, q_clean]
+        like = f"%{q_clean}%"
+        expr = (
+            "("
+            f"{side}_name LIKE %s OR "
+            f"{side}_citizenid LIKE %s OR "
+            f"CAST({side}_static_id AS CHAR) LIKE %s"
+            ")"
+        )
+        return expr, [like, like, like]
+
+    player_q = (player or "").strip()
+    player2_q = (player2 or "").strip()
+    if player_q and player2_q:
+        actor_p1_expr, actor_p1_args = _build_actor_target_match_expr(player_q, "actor")
+        target_p2_expr, target_p2_args = _build_actor_target_match_expr(player2_q, "target")
+        actor_p2_expr, actor_p2_args = _build_actor_target_match_expr(player2_q, "actor")
+        target_p1_expr, target_p1_args = _build_actor_target_match_expr(player_q, "target")
+        where.append(
+            "("
+            f"(({actor_p1_expr}) AND ({target_p2_expr})) OR "
+            f"(({actor_p2_expr}) AND ({target_p1_expr}))"
+            ")"
+        )
+        args.extend(actor_p1_args + target_p2_args + actor_p2_args + target_p1_args)
+    elif player_q:
+        expr, expr_args = _build_side_match_expr(player_q, "actor", "target")
+        where.append(expr)
+        args.extend(expr_args)
+    elif player2_q:
+        expr, expr_args = _build_side_match_expr(player2_q, "actor", "target")
+        where.append(expr)
+        args.extend(expr_args)
 
     item_q = (item or "").strip()
     if item_q:

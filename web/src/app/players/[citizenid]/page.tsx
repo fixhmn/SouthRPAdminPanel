@@ -618,6 +618,12 @@ export default function PlayerPage() {
             </div>
           )}
           <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
+            {can(me, "game_logs.inventory.read") && (
+              <Link className="btn secondary" href={`/game-logs/inventory?player=${encodeURIComponent(cid)}`}>
+                Смотреть логи инвентаря
+              </Link>
+            )}
+
             {can(me, "players.manage_wl") && (
               <>
                 <button disabled={busy} className="btn" onClick={() => act(`/players/${cid}/actions/addwl`)}>
