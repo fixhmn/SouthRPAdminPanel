@@ -849,6 +849,43 @@ async def _ensure_audit_table(pool):
                     payload_json JSON NOT NULL
                 )
                 """
+                )
+
+
+async def _ensure_game_inventory_logs_table(pool):
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_game_inventory_logs (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    ts DATETIME NOT NULL,
+                    action_key VARCHAR(64) NOT NULL,
+                    item_name VARCHAR(128) NULL,
+                    item_label VARCHAR(256) NULL,
+                    item_count INT NOT NULL DEFAULT 1,
+                    plate VARCHAR(32) NULL,
+                    drop_id VARCHAR(64) NULL,
+                    actor_source INT NULL,
+                    actor_citizenid VARCHAR(64) NULL,
+                    actor_static_id INT NULL,
+                    actor_name VARCHAR(128) NULL,
+                    target_source INT NULL,
+                    target_citizenid VARCHAR(64) NULL,
+                    target_static_id INT NULL,
+                    target_name VARCHAR(128) NULL,
+                    from_type VARCHAR(32) NULL,
+                    to_type VARCHAR(32) NULL,
+                    from_inventory VARCHAR(128) NULL,
+                    to_inventory VARCHAR(128) NULL,
+                    payload_json JSON NULL,
+                    INDEX idx_ts (ts),
+                    INDEX idx_action (action_key),
+                    INDEX idx_item_name (item_name),
+                    INDEX idx_actor_citizen (actor_citizenid),
+                    INDEX idx_target_citizen (target_citizenid)
+                )
+                """
             )
 
 
@@ -857,6 +894,8 @@ async def _startup():
     await ensure_rbac_schema()
     pool = await get_pool()
     await _ensure_game_actions_table(pool)
+    await _ensure_audit_table(pool)
+    await _ensure_game_inventory_logs_table(pool)
 
 
 @app.get("/health")
@@ -2823,6 +2862,122 @@ async def audit(
             rows = await cur.fetchall()
 
     return {"items": rows, "admin": admin.login}
+
+
+@app.get("/game-logs/inventory")
+async def game_logs_inventory(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=50000),
+    action: str | None = Query(default=None, max_length=64),
+    player: str | None = Query(default=None, max_length=128),
+    item: str | None = Query(default=None, max_length=128),
+    date_from: str | None = Query(default=None, max_length=32),
+    date_to: str | None = Query(default=None, max_length=32),
+    sort: str = Query(default="date_desc", pattern="^(date_desc|date_asc|item_asc|item_desc)$"),
+    admin: AdminContext = Depends(require_permission("game_logs.inventory.read")),
+):
+    pool = await get_pool()
+    await _ensure_game_inventory_logs_table(pool)
+
+    where: list[str] = []
+    args: list[Any] = []
+
+    if action:
+        where.append("action_key = %s")
+        args.append(action.strip())
+
+    player_q = (player or "").strip()
+    if player_q:
+        like = f"%{player_q}%"
+        where.append(
+            "("
+            "actor_name LIKE %s OR target_name LIKE %s OR "
+            "actor_citizenid LIKE %s OR target_citizenid LIKE %s OR "
+            "CAST(actor_static_id AS CHAR) LIKE %s OR CAST(target_static_id AS CHAR) LIKE %s"
+            ")"
+        )
+        args.extend([like, like, like, like, like, like])
+
+    item_q = (item or "").strip()
+    if item_q:
+        like = f"%{item_q}%"
+        where.append("(item_name LIKE %s OR item_label LIKE %s)")
+        args.extend([like, like])
+
+    if date_from:
+        try:
+            dt_from = datetime.fromisoformat(date_from.strip())
+            where.append("ts >= %s")
+            args.append(dt_from)
+        except Exception:
+            raise HTTPException(400, "date_from must be ISO format")
+
+    if date_to:
+        try:
+            dt_to = datetime.fromisoformat(date_to.strip())
+            where.append("ts <= %s")
+            args.append(dt_to)
+        except Exception:
+            raise HTTPException(400, "date_to must be ISO format")
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    order_sql = {
+        "date_desc": "ORDER BY ts DESC, id DESC",
+        "date_asc": "ORDER BY ts ASC, id ASC",
+        "item_asc": "ORDER BY item_name ASC, ts DESC, id DESC",
+        "item_desc": "ORDER BY item_name DESC, ts DESC, id DESC",
+    }[sort]
+
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT COUNT(*) AS c
+                FROM web_game_inventory_logs
+                {where_sql}
+                """,
+                tuple(args),
+            )
+            total_row = await cur.fetchone()
+            total = int(total_row.get("c") or 0)
+
+            await cur.execute(
+                f"""
+                SELECT
+                    id, ts, action_key,
+                    item_name, item_label, item_count, plate, drop_id,
+                    actor_source, actor_citizenid, actor_static_id, actor_name,
+                    target_source, target_citizenid, target_static_id, target_name,
+                    from_type, to_type, from_inventory, to_inventory
+                FROM web_game_inventory_logs
+                {where_sql}
+                {order_sql}
+                LIMIT %s OFFSET %s
+                """,
+                tuple(args + [limit, offset]),
+            )
+            rows = await cur.fetchall()
+
+            await cur.execute(
+                """
+                SELECT action_key, COUNT(*) AS c
+                FROM web_game_inventory_logs
+                GROUP BY action_key
+                ORDER BY action_key
+                """
+            )
+            action_rows = await cur.fetchall()
+
+    actions = [{"action_key": str(r.get("action_key") or ""), "count": int(r.get("c") or 0)} for r in action_rows]
+    return {
+        "total": total,
+        "count": len(rows),
+        "limit": limit,
+        "offset": offset,
+        "items": rows,
+        "actions": actions,
+        "admin": admin.login,
+    }
 
 
 @app.get("/admin/permissions")

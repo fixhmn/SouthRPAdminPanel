@@ -1,6 +1,7 @@
 local RESOURCE_NAME = GetCurrentResourceName()
 local TOKEN_CONVAR = "south_webbridge_token"
 local onlinePlayers = {}
+local inventoryHookRegistered = false
 
 local function getBridgeToken()
     return tostring(GetConvar(TOKEN_CONVAR, ""))
@@ -185,6 +186,147 @@ local function buildOnlinePlayerSnapshot(src)
     end
 
     return item
+end
+
+local function resolvePlayerIdentity(src)
+    if not src or not GetPlayerName(src) then
+        return nil
+    end
+    local row = buildOnlinePlayerSnapshot(src) or {}
+    return {
+        source = src,
+        citizenid = row.citizenid,
+        static_id = row.static_id,
+        name = row.name or GetPlayerName(src),
+    }
+end
+
+local function coalesceItemData(payload)
+    local fromSlot = type(payload.fromSlot) == "table" and payload.fromSlot or nil
+    local toSlot = type(payload.toSlot) == "table" and payload.toSlot or nil
+    local item = fromSlot or toSlot or {}
+    local metadata = type(item.metadata) == "table" and item.metadata or {}
+    local itemName = item.name or item.item
+    local itemLabel = item.label
+    local plate = metadata.plate and tostring(metadata.plate) or nil
+    return itemName, itemLabel, plate
+end
+
+local function extractPlateFromInventoryId(invId)
+    if type(invId) ~= "string" then
+        return nil
+    end
+    local glove = invId:match("^glove(.+)$")
+    if glove and glove ~= "" then
+        return glove
+    end
+    local trunk = invId:match("^trunk(.+)$")
+    if trunk and trunk ~= "" then
+        return trunk
+    end
+    return nil
+end
+
+local function classifyInventoryAction(payload)
+    local action = tostring(payload.action or "")
+    local fromType = tostring(payload.fromType or "")
+    local toType = tostring(payload.toType or "")
+
+    if action == "give" and fromType == "player" and toType == "player" then
+        return "give_player"
+    end
+    if action == "move" and fromType == "player" and toType == "drop" then
+        return "drop_ground"
+    end
+    if action == "move" and fromType == "drop" and toType == "player" then
+        return "pickup_drop"
+    end
+    if action == "move" and fromType == "player" and toType == "glovebox" then
+        return "put_glovebox"
+    end
+    if action == "move" and fromType == "glovebox" and toType == "player" then
+        return "take_glovebox"
+    end
+    if action == "move" and fromType == "player" and toType == "trunk" then
+        return "put_trunk"
+    end
+    if action == "move" and fromType == "trunk" and toType == "player" then
+        return "take_trunk"
+    end
+    if action == "move" and fromType == "trunk" and toType == "glovebox" then
+        return "trunk_to_glovebox"
+    end
+    if action == "move" and fromType == "glovebox" and toType == "trunk" then
+        return "glovebox_to_trunk"
+    end
+    if action == "stack" then
+        return "stack"
+    end
+    if action == "swap" then
+        return "swap"
+    end
+    return "other"
+end
+
+local function tryInsertInventoryLog(payload)
+    if not (MySQL and MySQL.insert and MySQL.insert.await) then
+        return
+    end
+
+    local fromInventory = tostring(payload.fromInventory or "")
+    local toInventory = tostring(payload.toInventory or "")
+    local actionKey = classifyInventoryAction(payload)
+    local itemName, itemLabel, plateFromMeta = coalesceItemData(payload)
+    local plate = plateFromMeta or extractPlateFromInventoryId(fromInventory) or extractPlateFromInventoryId(toInventory)
+    local dropId = payload.dropId or (fromInventory:match("^drop[%w_%-]+$") and fromInventory) or (toInventory:match("^drop[%w_%-]+$") and toInventory)
+
+    local actorSource = tonumber(payload.source) or (tostring(payload.fromType) == "player" and tonumber(payload.fromInventory) or nil)
+    local targetSource = (tostring(payload.toType) == "player" and tonumber(payload.toInventory) or nil)
+    local actor = resolvePlayerIdentity(actorSource)
+    local target = resolvePlayerIdentity(targetSource)
+
+    local count = tonumber(payload.count) or 1
+    if count < 1 then count = 1 end
+
+    local ok = pcall(function()
+        MySQL.insert.await(
+            [[
+                INSERT INTO web_game_inventory_logs (
+                    ts, action_key,
+                    item_name, item_label, item_count, plate, drop_id,
+                    actor_source, actor_citizenid, actor_static_id, actor_name,
+                    target_source, target_citizenid, target_static_id, target_name,
+                    from_type, to_type, from_inventory, to_inventory, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ]],
+            {
+                os.date("%Y-%m-%d %H:%M:%S"),
+                actionKey,
+                itemName and tostring(itemName) or nil,
+                itemLabel and tostring(itemLabel) or nil,
+                count,
+                plate and tostring(plate) or nil,
+                dropId and tostring(dropId) or nil,
+                actor and actor.source or nil,
+                actor and actor.citizenid or nil,
+                actor and actor.static_id or nil,
+                actor and actor.name or nil,
+                target and target.source or nil,
+                target and target.citizenid or nil,
+                target and target.static_id or nil,
+                target and target.name or nil,
+                payload.fromType and tostring(payload.fromType) or nil,
+                payload.toType and tostring(payload.toType) or nil,
+                fromInventory ~= "" and fromInventory or nil,
+                toInventory ~= "" and toInventory or nil,
+                json.encode(payload),
+            }
+        )
+    end)
+
+    if not ok then
+        -- swallow: logging must never break inventory actions
+    end
 end
 
 local function refreshOnlinePlayer(src)
@@ -533,6 +675,63 @@ AddEventHandler("QBCore:Server:OnPlayerLoaded", function(playerObj)
 end)
 
 CreateThread(function()
+    if MySQL and MySQL.query and MySQL.query.await then
+        pcall(function()
+            MySQL.query.await(
+                [[
+                    CREATE TABLE IF NOT EXISTS web_game_inventory_logs (
+                        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                        ts DATETIME NOT NULL,
+                        action_key VARCHAR(64) NOT NULL,
+                        item_name VARCHAR(128) NULL,
+                        item_label VARCHAR(256) NULL,
+                        item_count INT NOT NULL DEFAULT 1,
+                        plate VARCHAR(32) NULL,
+                        drop_id VARCHAR(64) NULL,
+                        actor_source INT NULL,
+                        actor_citizenid VARCHAR(64) NULL,
+                        actor_static_id INT NULL,
+                        actor_name VARCHAR(128) NULL,
+                        target_source INT NULL,
+                        target_citizenid VARCHAR(64) NULL,
+                        target_static_id INT NULL,
+                        target_name VARCHAR(128) NULL,
+                        from_type VARCHAR(32) NULL,
+                        to_type VARCHAR(32) NULL,
+                        from_inventory VARCHAR(128) NULL,
+                        to_inventory VARCHAR(128) NULL,
+                        payload_json JSON NULL,
+                        INDEX idx_ts (ts),
+                        INDEX idx_action (action_key),
+                        INDEX idx_item_name (item_name),
+                        INDEX idx_actor_citizen (actor_citizenid),
+                        INDEX idx_target_citizen (target_citizenid)
+                    )
+                ]]
+            )
+        end)
+    end
+
+    while not inventoryHookRegistered do
+        local okHook = pcall(function()
+            if exports.ox_inventory and exports.ox_inventory.registerHook then
+                exports.ox_inventory:registerHook("swapItems", function(payload)
+                    tryInsertInventoryLog(payload)
+                    return true
+                end, {})
+                inventoryHookRegistered = true
+            end
+        end)
+        if inventoryHookRegistered then
+            print(("[^2%s^7] ox_inventory hook registered: swapItems"):format(RESOURCE_NAME))
+            break
+        end
+        if not okHook then
+            -- keep retrying: ox_inventory may not be ready yet
+        end
+        Wait(3000)
+    end
+
     Wait(1000)
     rebuildOnlinePlayers()
     while true do

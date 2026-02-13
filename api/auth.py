@@ -24,6 +24,7 @@ KNOWN_PERMISSIONS = {
     "vehicles.edit",
     "actions.manage_templates",
     "audit.read",
+    "game_logs.inventory.read",
     "admins.manage",
     "auth.discord_login",
 }
@@ -44,6 +45,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "vehicles.read",
         "vehicles.edit",
         "actions.manage_templates",
+        "game_logs.inventory.read",
     ],
     "moderator": [
         "players.read",
@@ -58,8 +60,9 @@ DEFAULT_ROLE_PERMISSIONS = {
         "vehicles.edit",
         "actions.manage_templates",
         "audit.read",
+        "game_logs.inventory.read",
     ],
-    "helper": ["players.read", "vehicles.read", "audit.read"],
+    "helper": ["players.read", "vehicles.read", "audit.read", "game_logs.inventory.read"],
 }
 
 ROLE_RENAME_MAP = {

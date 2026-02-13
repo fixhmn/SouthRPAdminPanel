@@ -103,6 +103,11 @@ export default function Players() {
                 Журнал аудита
               </Link>
             )}
+            {can(me, "game_logs.inventory.read") && (
+              <Link className="btn secondary" href="/game-logs/inventory">
+                Игровые логи
+              </Link>
+            )}
             {can(me, "actions.manage_templates") && (
               <Link className="btn secondary" href="/game-actions">
                 Шаблоны

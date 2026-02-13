@@ -177,6 +177,18 @@ function HomeContent() {
               </article>
             )}
 
+            {can(me, "game_logs.inventory.read") && (
+              <article className="card">
+                <h3 style={{ marginTop: 0 }}>Игровые логи</h3>
+                <p className="small">Подробные логи внутриигровых действий. Сейчас: логи инвентаря.</p>
+                <div style={{ marginTop: 10 }}>
+                  <Link className="btn" href="/game-logs">
+                    Открыть
+                  </Link>
+                </div>
+              </article>
+            )}
+
             {can(me, "admins.manage") && (
               <article className="card">
                 <h3 style={{ marginTop: 0 }}>Админы и роли</h3>
