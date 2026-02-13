@@ -2,6 +2,7 @@ local RESOURCE_NAME = GetCurrentResourceName()
 local TOKEN_CONVAR = "south_webbridge_token"
 local onlinePlayers = {}
 local inventoryHookRegistered = false
+local inventoryHookDebugCount = 0
 
 local function getBridgeToken()
     return tostring(GetConvar(TOKEN_CONVAR, ""))
@@ -270,6 +271,10 @@ end
 
 local function tryInsertInventoryLog(payload)
     if not (MySQL and MySQL.insert and MySQL.insert.await) then
+        if inventoryHookDebugCount < 5 then
+            print(("[^1%s^7] inventory log skipped: MySQL.insert.await unavailable"):format(RESOURCE_NAME))
+            inventoryHookDebugCount = inventoryHookDebugCount + 1
+        end
         return
     end
 
@@ -288,7 +293,15 @@ local function tryInsertInventoryLog(payload)
     local count = tonumber(payload.count) or 1
     if count < 1 then count = 1 end
 
-    local ok = pcall(function()
+    local payloadJson = nil
+    local okEncode, encoded = pcall(function()
+        return json.encode(payload)
+    end)
+    if okEncode then
+        payloadJson = encoded
+    end
+
+    local ok, err = pcall(function()
         MySQL.insert.await(
             [[
                 INSERT INTO web_game_inventory_logs (
@@ -319,13 +332,21 @@ local function tryInsertInventoryLog(payload)
                 payload.toType and tostring(payload.toType) or nil,
                 fromInventory ~= "" and fromInventory or nil,
                 toInventory ~= "" and toInventory or nil,
-                json.encode(payload),
+                payloadJson,
             }
         )
     end)
 
     if not ok then
-        -- swallow: logging must never break inventory actions
+        print(("[^1%s^7] inventory log insert failed: %s"):format(RESOURCE_NAME, tostring(err)))
+    elseif inventoryHookDebugCount < 10 then
+        print(("[^2%s^7] inventory log inserted action=%s item=%s count=%s"):format(
+            RESOURCE_NAME,
+            tostring(actionKey),
+            tostring(itemName),
+            tostring(count)
+        ))
+        inventoryHookDebugCount = inventoryHookDebugCount + 1
     end
 end
 
@@ -716,6 +737,15 @@ CreateThread(function()
         local okHook = pcall(function()
             if exports.ox_inventory and exports.ox_inventory.registerHook then
                 exports.ox_inventory:registerHook("swapItems", function(payload)
+                    if inventoryHookDebugCount < 5 then
+                        print(("[^5%s^7] swapItems hook event action=%s fromType=%s toType=%s"):format(
+                            RESOURCE_NAME,
+                            tostring(payload and payload.action),
+                            tostring(payload and payload.fromType),
+                            tostring(payload and payload.toType)
+                        ))
+                        inventoryHookDebugCount = inventoryHookDebugCount + 1
+                    end
                     tryInsertInventoryLog(payload)
                     return true
                 end, {})
