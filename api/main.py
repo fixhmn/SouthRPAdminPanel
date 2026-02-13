@@ -587,6 +587,104 @@ async def _enrich_rows_with_static_id_by_license_tails(pool, rows: list[dict[str
                 break
 
 
+async def _find_players_by_static_id(pool, static_id: int, limit: int) -> list[dict[str, Any]]:
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            # Fast path: direct join match.
+            await cur.execute(
+                f"""
+                SELECT p.*, s.static_id, s.discord_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE s.static_id = %s
+                LIMIT %s
+                """,
+                (static_id, limit),
+            )
+            players = await cur.fetchall()
+            if players:
+                return players
+
+            # Resolve static_id -> license tail from static_ids.
+            await cur.execute(
+                """
+                SELECT SUBSTRING_INDEX(license, ':', -1) AS tail
+                FROM static_ids
+                WHERE static_id = %s
+                LIMIT 1
+                """,
+                (static_id,),
+            )
+            tail_row = await cur.fetchone()
+            tail = str(tail_row.get("tail") or "").strip() if tail_row else ""
+            if not tail:
+                return []
+
+            # Fallback 1: match players by own license/license2 tails.
+            await cur.execute(
+                f"""
+                SELECT p.*, s.static_id, s.discord_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE SUBSTRING_INDEX(p.license, ':', -1) = %s
+                   OR SUBSTRING_INDEX(COALESCE(p.license2, ''), ':', -1) = %s
+                LIMIT %s
+                """,
+                (tail, tail, max(limit, 50)),
+            )
+            players = await cur.fetchall()
+            if players:
+                await _enrich_rows_with_static_id_by_license_tails(pool, players)
+                return [row for row in players if int(row.get("static_id") or 0) == static_id][:limit]
+
+            # Fallback 2: find userIds in users by license/license2 tails.
+            await cur.execute(
+                """
+                SELECT userId
+                FROM users
+                WHERE SUBSTRING_INDEX(COALESCE(license, ''), ':', -1) = %s
+                   OR SUBSTRING_INDEX(COALESCE(license2, ''), ':', -1) = %s
+                LIMIT 200
+                """,
+                (tail, tail),
+            )
+            user_rows = await cur.fetchall()
+            user_ids: list[int] = []
+            for row in user_rows:
+                try:
+                    user_ids.append(int(row.get("userId")))
+                except Exception:
+                    continue
+            if not user_ids:
+                return []
+
+            placeholders = ",".join(["%s"] * len(user_ids))
+            candidates: list[dict[str, Any]] = []
+            for col in ("userId", "userid", "user_id", "UserID"):
+                try:
+                    await cur.execute(
+                        f"""
+                        SELECT p.*, s.static_id, s.discord_id
+                        FROM players p
+                        LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                        WHERE p.{col} IN ({placeholders})
+                        LIMIT %s
+                        """,
+                        tuple(user_ids) + (max(limit, 50),),
+                    )
+                    candidates = await cur.fetchall()
+                    if candidates:
+                        break
+                except Exception:
+                    # Column may not exist in this schema variant.
+                    continue
+
+    if not candidates:
+        return []
+    await _enrich_rows_with_static_id_by_license_tails(pool, candidates)
+    return [row for row in candidates if int(row.get("static_id") or 0) == static_id][:limit]
+
+
 async def _drop_player_if_online(pool, citizenid: str, reason: str, admin: AdminContext) -> dict[str, Any]:
     player_ctx = await _get_player_bridge_context(pool, citizenid)
     try:
@@ -1026,17 +1124,9 @@ async def players_search(
                 players = await cur.fetchall()
 
             elif field == "static_id":
-                await cur.execute(
-                    f"""
-                    SELECT p.*, s.static_id, s.discord_id
-                    FROM players p
-                    LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
-                    WHERE s.static_id = %s
-                    LIMIT %s
-                """,
-                    (q, limit),
-                )
-                players = await cur.fetchall()
+                if not str(q).isdigit():
+                    raise HTTPException(400, "q must be static_id digits")
+                players = await _find_players_by_static_id(pool, int(q), limit)
 
             else:
                 await cur.execute(
