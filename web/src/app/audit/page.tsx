@@ -214,20 +214,20 @@ export default function AuditPage() {
             </h1>
             <div className="muted">{me ? `Вы: ${me.login} (${roleLabel(me.role_name)})` : "Проверка авторизации..."}</div>
           </div>
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            <Link className="btn secondary" href="/">
+          <div className="topMenu">
+            <Link className="menuTab" href="/">
               Главная
             </Link>
-            <Link className="btn secondary" href="/players">
+            <Link className="menuTab" href="/players">
               Поиск игроков
             </Link>
             {can(me, "vehicles.read") && (
-              <Link className="btn secondary" href="/vehicles">
+              <Link className="menuTab" href="/vehicles">
                 Поиск машин
               </Link>
             )}
             {can(me, "game_logs.inventory.read") && (
-              <Link className="btn secondary" href="/game-logs/inventory">
+              <Link className="menuTab" href="/game-logs/inventory">
                 Игровые логи
               </Link>
             )}

@@ -278,14 +278,14 @@ export default function InventoryGameLogsPage() {
             </h1>
             <div className="muted">{me ? `Вы: ${me.login} (${roleLabel(me.role_name)})` : "Проверка авторизации..."}</div>
           </div>
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            <Link className="btn secondary" href="/">
+          <div className="topMenu">
+            <Link className="menuTab" href="/">
               Главная
             </Link>
-            <Link className="btn secondary" href="/game-logs">
+            <Link className="menuTab" href="/game-logs">
               Разделы логов
             </Link>
-            <Link className="btn secondary" href="/players">
+            <Link className="menuTab" href="/players">
               Игроки
             </Link>
           </div>

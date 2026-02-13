@@ -83,14 +83,14 @@ export default function OnlinePlayersPage() {
               {me ? `Вы: ${me.login} (${roleLabel(me.role_name)})` : "Добавьте токен администратора в браузере"}
             </div>
           </div>
-          <div className="row">
-            <Link className="btn secondary" href="/players">
+          <div className="topMenu">
+            <Link className="menuTab" href="/players">
               Поиск игроков
             </Link>
-            <Link className="btn secondary" href="/">
+            <Link className="menuTab" href="/">
               Главная
             </Link>
-            <button className="btn secondary" onClick={logout}>
+            <button className="menuTab" onClick={logout}>
               Выйти
             </button>
           </div>

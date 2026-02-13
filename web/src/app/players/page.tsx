@@ -84,40 +84,40 @@ export default function Players() {
               {me ? `Вы: ${me.login} (${roleLabel(me.role_name)})` : "Добавьте токен администратора в браузере"}
             </div>
           </div>
-          <div className="row">
-            <Link className="btn secondary" href="/">
+          <div className="topMenu">
+            <Link className="menuTab" href="/">
               Главная
             </Link>
             {can(me, "players.read") && (
-              <Link className="btn secondary" href="/players/online">
+              <Link className="menuTab" href="/players/online">
                 Онлайн
               </Link>
             )}
             {can(me, "vehicles.read") && (
-              <Link className="btn secondary" href="/vehicles">
+              <Link className="menuTab" href="/vehicles">
                 Поиск машин
               </Link>
             )}
             {can(me, "audit.read") && (
-              <Link className="btn secondary" href="/audit">
+              <Link className="menuTab" href="/audit">
                 Журнал аудита
               </Link>
             )}
             {can(me, "game_logs.inventory.read") && (
-              <Link className="btn secondary" href="/game-logs/inventory">
+              <Link className="menuTab" href="/game-logs/inventory">
                 Игровые логи
               </Link>
             )}
             {can(me, "actions.manage_templates") && (
-              <Link className="btn secondary" href="/game-actions">
+              <Link className="menuTab" href="/game-actions">
                 Шаблоны
               </Link>
             )}
-            <button className="btn secondary" onClick={logout}>
+            <button className="menuTab" onClick={logout}>
               Выйти
             </button>
             {can(me, "admins.manage") && (
-              <Link className="btn secondary" href="/admins">
+              <Link className="menuTab" href="/admins">
                 Админы и роли
               </Link>
             )}

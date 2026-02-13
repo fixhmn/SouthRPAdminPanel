@@ -653,55 +653,53 @@ export default function PlayerPage() {
 
             {(can(me, "players.manage_ban") || can(me, "players.manage_slots")) && (
               <div style={{ border: "1px solid var(--line)", background: "#090909", padding: 8 }}>
-                <div className="row" style={{ flexWrap: "wrap" }}>
-                  {can(me, "players.manage_ban") && (
-                    <>
-                      <input
-                        type="number"
-                        value={banDays}
-                        min={1}
-                        max={3650}
-                        onChange={(e) => setBanDays(parseInt(e.target.value || "1", 10))}
-                        className="input"
-                        style={{ width: 100 }}
-                      />
-                      <button
-                        disabled={busy}
-                        className="btn"
-                        onClick={() => act(`/players/${cid}/actions/banwl?days=${banDays}`)}
-                      >
-                        Выдать WL-бан
-                      </button>
-                      <button
-                        disabled={busy}
-                        className="btn secondary"
-                        onClick={() => act(`/players/${cid}/actions/unbanwl`)}
-                      >
-                        Снять WL-бан
-                      </button>
-                    </>
-                  )}
-                  {can(me, "players.manage_slots") && (
-                    <>
-                      <input
-                        type="number"
-                        value={slots}
-                        min={1}
-                        max={20}
-                        onChange={(e) => setSlots(parseInt(e.target.value || "1", 10))}
-                        className="input"
-                        style={{ width: 100 }}
-                      />
-                      <button
-                        disabled={busy}
-                        className="btn"
-                        onClick={() => act(`/players/${cid}/actions/setslots?slots=${slots}`)}
-                      >
-                        Установить слоты
-                      </button>
-                    </>
-                  )}
-                </div>
+                {can(me, "players.manage_ban") && (
+                  <div className="row" style={{ flexWrap: "wrap" }}>
+                    <input
+                      type="number"
+                      value={banDays}
+                      min={1}
+                      max={3650}
+                      onChange={(e) => setBanDays(parseInt(e.target.value || "1", 10))}
+                      className="input"
+                      style={{ width: 100 }}
+                    />
+                    <button
+                      disabled={busy}
+                      className="btn"
+                      onClick={() => act(`/players/${cid}/actions/banwl?days=${banDays}`)}
+                    >
+                      Выдать WL-бан
+                    </button>
+                    <button
+                      disabled={busy}
+                      className="btn secondary"
+                      onClick={() => act(`/players/${cid}/actions/unbanwl`)}
+                    >
+                      Снять WL-бан
+                    </button>
+                  </div>
+                )}
+                {can(me, "players.manage_slots") && (
+                  <div className="row" style={{ flexWrap: "wrap", marginTop: can(me, "players.manage_ban") ? 8 : 0 }}>
+                    <input
+                      type="number"
+                      value={slots}
+                      min={1}
+                      max={20}
+                      onChange={(e) => setSlots(parseInt(e.target.value || "1", 10))}
+                      className="input"
+                      style={{ width: 100 }}
+                    />
+                    <button
+                      disabled={busy}
+                      className="btn"
+                      onClick={() => act(`/players/${cid}/actions/setslots?slots=${slots}`)}
+                    >
+                      Установить слоты
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

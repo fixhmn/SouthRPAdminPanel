@@ -21,15 +21,15 @@ export default function GameLogsPage() {
             </h1>
             <div className="muted">{me ? `Вы: ${me.login} (${roleLabel(me.role_name)})` : "Проверка авторизации..."}</div>
           </div>
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            <Link className="btn secondary" href="/">
+          <div className="topMenu">
+            <Link className="menuTab" href="/">
               Главная
             </Link>
-            <Link className="btn secondary" href="/players">
+            <Link className="menuTab" href="/players">
               Игроки
             </Link>
             {can(me, "audit.read") && (
-              <Link className="btn secondary" href="/audit">
+              <Link className="menuTab" href="/audit">
                 Журнал аудита
               </Link>
             )}

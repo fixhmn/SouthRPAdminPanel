@@ -73,6 +73,31 @@ body {
   align-items: center;
 }
 
+.topMenu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.menuTab {
+  border: 1px solid #252525;
+  background: linear-gradient(180deg, #111111, #0c0c0c);
+  color: #e8e8e8;
+  font: inherit;
+  font-weight: 620;
+  padding: 8px 12px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.menuTab:hover {
+  border-color: #3c616b;
+  background: linear-gradient(180deg, #14191b, #0d0f10);
+  color: #f4fbff;
+}
+
 .grid {
   display: grid;
   gap: 10px;
