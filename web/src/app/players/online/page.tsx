@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AdminMe, api, can, clearToken, fetchMe, roleLabel } from "@/lib/api";
 
 type OnlineRes = {
@@ -24,6 +24,7 @@ export default function OnlinePlayersPage() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [limit, setLimit] = useState(100);
+  const [query, setQuery] = useState("");
 
   const load = useCallback(async (currentLimit: number) => {
     setErr("");
@@ -47,6 +48,28 @@ export default function OnlinePlayersPage() {
     clearToken();
     window.location.href = "/";
   }
+
+  const filteredItems = useMemo(() => {
+    const items = data?.items || [];
+    const needle = query.trim().toLowerCase();
+    if (!needle) return items;
+
+    return items.filter((p) => {
+      const haystack = [
+        String(p.source ?? ""),
+        String(p.static_id ?? ""),
+        String(p.citizenid ?? ""),
+        String(p.firstname ?? ""),
+        String(p.lastname ?? ""),
+        String(p.name ?? ""),
+        String(p.job ?? ""),
+        String(p.gang ?? ""),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [data, query]);
 
   return (
     <main className="container">
@@ -85,6 +108,19 @@ export default function OnlinePlayersPage() {
             onChange={(e) => setLimit(parseInt(e.target.value || "100", 10))}
             style={{ maxWidth: 140 }}
           />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void load(limit);
+              }
+            }}
+            placeholder="Поиск: ServerID / StaticID / CitizenID / имя / job / gang"
+            className="input"
+            style={{ flex: 1 }}
+          />
           <button className="btn" onClick={() => void load(limit)} disabled={!can(me, "players.read") || loading}>
             {loading ? "Загрузка..." : "Обновить"}
           </button>
@@ -95,9 +131,11 @@ export default function OnlinePlayersPage() {
 
       {data && (
         <section style={{ marginTop: 14 }}>
-          <div className="muted">Онлайн: {data.count}</div>
+          <div className="muted">
+            Онлайн: {data.count} | По фильтру: {filteredItems.length}
+          </div>
           <div className="grid" style={{ marginTop: 10 }}>
-            {data.items.map((p) => (
+            {filteredItems.map((p) => (
               <article key={p.citizenid} className="card">
                 <div className="playerName">
                   {p.firstname} {p.lastname}

@@ -455,6 +455,59 @@ def _kick_reason(raw_reason: str | None, fallback: str) -> str:
     return reason[:256] if reason else fallback
 
 
+async def _enrich_rows_with_static_id_by_license_tails(pool, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+
+    missing_rows: list[dict[str, Any]] = [r for r in rows if r.get("static_id") is None]
+    if not missing_rows:
+        return
+
+    tails: set[str] = set()
+    for row in missing_rows:
+        t1 = license_tail(row.get("license"))
+        t2 = license_tail(row.get("license2"))
+        if t1:
+            tails.add(t1)
+        if t2:
+            tails.add(t2)
+    if not tails:
+        return
+
+    placeholders = ",".join(["%s"] * len(tails))
+    tail_to_static: dict[str, int] = {}
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                f"""
+                SELECT static_id, SUBSTRING_INDEX(license, ':', -1) AS license_tail
+                FROM static_ids
+                WHERE SUBSTRING_INDEX(license, ':', -1) IN ({placeholders})
+                """,
+                tuple(sorted(tails)),
+            )
+            static_rows = await cur.fetchall()
+
+    for row in static_rows:
+        tail = str(row.get("license_tail") or "").strip()
+        static_val = row.get("static_id")
+        if not tail or static_val is None or tail in tail_to_static:
+            continue
+        try:
+            tail_to_static[tail] = int(static_val)
+        except Exception:
+            continue
+
+    for row in missing_rows:
+        for t in (license_tail(row.get("license")), license_tail(row.get("license2"))):
+            if not t:
+                continue
+            resolved = tail_to_static.get(t)
+            if resolved is not None:
+                row["static_id"] = resolved
+                break
+
+
 async def _drop_player_if_online(pool, citizenid: str, reason: str, admin: AdminContext) -> dict[str, Any]:
     player_ctx = await _get_player_bridge_context(pool, citizenid)
     try:
@@ -896,6 +949,8 @@ async def players_search(
                     if len(players) >= limit:
                         break
 
+    await _enrich_rows_with_static_id_by_license_tails(pool, players)
+
     out = []
     for p in players[:limit]:
         ci = _charinfo_to_dict(p.get("charinfo"))
@@ -977,19 +1032,22 @@ async def players_online(
         placeholders = ",".join(["%s"] * len(online_citizenids))
         pool = await get_pool()
         db_static_by_citizen: dict[str, int] = {}
+        player_rows: list[dict[str, Any]] = []
         async with pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     f"""
-                    SELECT p.citizenid, s.static_id
+                    SELECT p.*, s.static_id
                     FROM players p
                     LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
                     WHERE p.citizenid IN ({placeholders})
                     """,
                     tuple(online_citizenids),
                 )
-                rows = await cur.fetchall()
-        for row in rows:
+                player_rows = await cur.fetchall()
+
+        await _enrich_rows_with_static_id_by_license_tails(pool, player_rows)
+        for row in player_rows:
             try:
                 citizen = str(row.get("citizenid") or "").strip()
                 static_val = row.get("static_id")
@@ -1083,6 +1141,9 @@ async def player_get(
         normalized_inventory.append(item_obj)
 
     resolved_static_id = p.get("static_id")
+    if resolved_static_id is None:
+        await _enrich_rows_with_static_id_by_license_tails(pool, [p])
+        resolved_static_id = p.get("static_id")
     if resolved_static_id is None:
         try:
             online_payload = _post_bridge_online_list({})
