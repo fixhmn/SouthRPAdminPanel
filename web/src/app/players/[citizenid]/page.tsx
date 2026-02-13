@@ -584,131 +584,157 @@ export default function PlayerPage() {
 
         <section className="card">
           <h3>Действия</h3>
-          {can(me, "players.game_interact") && (
-            <div className="row" style={{ flexWrap: "wrap", marginTop: 8, marginBottom: 8 }}>
-              <button className="btn secondary" disabled={checkingOnline} onClick={() => void checkOnlineStatus(false)}>
-                {checkingOnline ? "Проверка..." : "Проверить онлайн"}
-              </button>
-              <div
-                style={{
-                  fontWeight: 700,
-                  color:
-                    onlineStatus === null
-                      ? "#c7cfdd"
-                      : onlineStatus.online
-                        ? "#39d98a"
-                        : "#ff5f5f",
-                }}
-              >
-                {onlineStatus === null
-                  ? "Проверка статуса..."
-                  : onlineStatus.online
-                    ? `Онлайн (ID ${String(onlineStatus.source ?? "-")})`
-                    : "Оффлайн"}
-              </div>
-              {onlineStatus?.online_on_other_character && onlineStatus.other_citizenid && (
-                <div style={{ fontWeight: 700, color: "#f6c85f" }}>
-                  Игрок онлайн на персонаже ID {String(onlineStatus.other_source ?? "-")} (
-                  <Link className="link" href={`/players/${onlineStatus.other_citizenid}`}>
-                    {String(onlineStatus.other_citizenid)}
-                  </Link>
-                  )
-                </div>
-              )}
-            </div>
-          )}
-          <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
-            {can(me, "game_logs.inventory.read") && (
-              <Link className="btn secondary" href={`/game-logs/inventory?player=${encodeURIComponent(cid)}`}>
-                Смотреть логи инвентаря
-              </Link>
-            )}
-
-            {can(me, "players.manage_wl") && (
-              <>
-                <button disabled={busy} className="btn" onClick={() => act(`/players/${cid}/actions/addwl`)}>
-                  Добавить WL
-                </button>
-                <button
-                  disabled={busy}
-                  className="btn secondary"
-                  onClick={() => act(`/players/${cid}/actions/removewl`)}
-                >
-                  Убрать WL
-                </button>
-              </>
-            )}
-
-            {can(me, "players.manage_ban") && (
-              <>
-                <input
-                  type="number"
-                  value={banDays}
-                  min={1}
-                  max={3650}
-                  onChange={(e) => setBanDays(parseInt(e.target.value || "1", 10))}
-                  className="input"
-                  style={{ width: 100 }}
-                />
-                <button
-                  disabled={busy}
-                  className="btn"
-                  onClick={() => act(`/players/${cid}/actions/banwl?days=${banDays}`)}
-                >
-                  Выдать WL-бан
-                </button>
-                <button disabled={busy} className="btn secondary" onClick={() => act(`/players/${cid}/actions/unbanwl`)}>
-                  Снять WL-бан
-                </button>
-              </>
-            )}
-
-            {can(me, "players.manage_slots") && (
-              <>
-                <input
-                  type="number"
-                  value={slots}
-                  min={1}
-                  max={20}
-                  onChange={(e) => setSlots(parseInt(e.target.value || "1", 10))}
-                  className="input"
-                  style={{ width: 100 }}
-                />
-                <button
-                  disabled={busy}
-                  className="btn"
-                  onClick={() => act(`/players/${cid}/actions/setslots?slots=${slots}`)}
-                >
-                  Установить слоты
-                </button>
-              </>
-            )}
-
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
             {can(me, "players.game_interact") && (
-              <>
-                <input
-                  className="input"
-                  value={kickReason}
-                  onChange={(e) => setKickReason(e.target.value)}
-                  placeholder="Причина кика (опционально)"
-                  style={{ minWidth: 240 }}
-                  maxLength={256}
-                />
-                <button
-                  disabled={busy || !onlineStatus?.online}
-                  className="btn danger"
-                  onClick={kickPlayerNow}
-                  title={onlineStatus?.online ? "" : "Игрок оффлайн"}
-                >
-                  Кикнуть
-                </button>
-              </>
+              <div style={{ border: "1px solid var(--line)", background: "#090909", padding: 8 }}>
+                <div className="row" style={{ flexWrap: "wrap" }}>
+                  <button
+                    className="btn secondary"
+                    disabled={checkingOnline}
+                    onClick={() => void checkOnlineStatus(false)}
+                  >
+                    {checkingOnline ? "Проверка..." : "Проверить онлайн"}
+                  </button>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      color:
+                        onlineStatus === null
+                          ? "#c7cfdd"
+                          : onlineStatus.online
+                            ? "#39d98a"
+                            : "#ff5f5f",
+                    }}
+                  >
+                    {onlineStatus === null
+                      ? "Проверка статуса..."
+                      : onlineStatus.online
+                        ? `Онлайн (ID ${String(onlineStatus.source ?? "-")})`
+                        : "Оффлайн"}
+                  </div>
+                </div>
+                {onlineStatus?.online_on_other_character && onlineStatus.other_citizenid && (
+                  <div style={{ marginTop: 6, fontWeight: 700, color: "#f6c85f" }}>
+                    Игрок онлайн на персонаже ID {String(onlineStatus.other_source ?? "-")} (
+                    <Link className="link" href={`/players/${onlineStatus.other_citizenid}`}>
+                      {String(onlineStatus.other_citizenid)}
+                    </Link>
+                    )
+                  </div>
+                )}
+              </div>
             )}
 
-            {can(me, "players.delete_character") && (
-              <button disabled={busy} onClick={del} className="btn danger">
-                Удалить персонажа
-              </button>
+            {(can(me, "game_logs.inventory.read") || can(me, "players.manage_wl")) && (
+              <div style={{ border: "1px solid var(--line)", background: "#090909", padding: 8 }}>
+                <div className="row" style={{ flexWrap: "wrap" }}>
+                  {can(me, "game_logs.inventory.read") && (
+                    <Link className="btn secondary" href={`/game-logs/inventory?player=${encodeURIComponent(cid)}`}>
+                      Смотреть логи инвентаря
+                    </Link>
+                  )}
+                  {can(me, "players.manage_wl") && (
+                    <>
+                      <button disabled={busy} className="btn" onClick={() => act(`/players/${cid}/actions/addwl`)}>
+                        Добавить WL
+                      </button>
+                      <button
+                        disabled={busy}
+                        className="btn secondary"
+                        onClick={() => act(`/players/${cid}/actions/removewl`)}
+                      >
+                        Убрать WL
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {(can(me, "players.manage_ban") || can(me, "players.manage_slots")) && (
+              <div style={{ border: "1px solid var(--line)", background: "#090909", padding: 8 }}>
+                <div className="row" style={{ flexWrap: "wrap" }}>
+                  {can(me, "players.manage_ban") && (
+                    <>
+                      <input
+                        type="number"
+                        value={banDays}
+                        min={1}
+                        max={3650}
+                        onChange={(e) => setBanDays(parseInt(e.target.value || "1", 10))}
+                        className="input"
+                        style={{ width: 100 }}
+                      />
+                      <button
+                        disabled={busy}
+                        className="btn"
+                        onClick={() => act(`/players/${cid}/actions/banwl?days=${banDays}`)}
+                      >
+                        Выдать WL-бан
+                      </button>
+                      <button
+                        disabled={busy}
+                        className="btn secondary"
+                        onClick={() => act(`/players/${cid}/actions/unbanwl`)}
+                      >
+                        Снять WL-бан
+                      </button>
+                    </>
+                  )}
+                  {can(me, "players.manage_slots") && (
+                    <>
+                      <input
+                        type="number"
+                        value={slots}
+                        min={1}
+                        max={20}
+                        onChange={(e) => setSlots(parseInt(e.target.value || "1", 10))}
+                        className="input"
+                        style={{ width: 100 }}
+                      />
+                      <button
+                        disabled={busy}
+                        className="btn"
+                        onClick={() => act(`/players/${cid}/actions/setslots?slots=${slots}`)}
+                      >
+                        Установить слоты
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {(can(me, "players.game_interact") || can(me, "players.delete_character")) && (
+              <div style={{ border: "1px solid var(--line)", background: "#090909", padding: 8 }}>
+                <div className="row" style={{ flexWrap: "wrap" }}>
+                  {can(me, "players.game_interact") && (
+                    <>
+                      <input
+                        className="input"
+                        value={kickReason}
+                        onChange={(e) => setKickReason(e.target.value)}
+                        placeholder="Причина кика (опционально)"
+                        style={{ minWidth: 260 }}
+                        maxLength={256}
+                      />
+                      <button
+                        disabled={busy || !onlineStatus?.online}
+                        className="btn danger"
+                        onClick={kickPlayerNow}
+                        title={onlineStatus?.online ? "" : "Игрок оффлайн"}
+                      >
+                        Кикнуть
+                      </button>
+                    </>
+                  )}
+                  {can(me, "players.delete_character") && (
+                    <button disabled={busy} onClick={del} className="btn danger">
+                      Удалить персонажа
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
           {err && (
