@@ -99,6 +99,20 @@ function storageText(type: string | null, inv: string | null, plate: string | nu
   return `${type || "?"} ${inv || "-"}`;
 }
 
+function normalizePlate(raw: string | null | undefined): string {
+  return (raw || "").trim().toUpperCase();
+}
+
+function VehiclePlateLink({ plate }: { plate: string | null | undefined }) {
+  const normalized = normalizePlate(plate);
+  if (!normalized) return null;
+  return (
+    <Link className="link" href={`/vehicles?plate=${encodeURIComponent(normalized)}`}>
+      {normalized}
+    </Link>
+  );
+}
+
 function actionLabel(row: InvLogRow): string {
   return ACTION_LABELS[row.action_key] || `Перемещение ${row.from_type || "?"} -> ${row.to_type || "?"}`;
 }
@@ -135,6 +149,18 @@ function messageText(row: InvLogRow): string {
     default:
       return `${actor}: ${item} (${storageText(row.from_type, row.from_inventory, row.plate)} -> ${storageText(row.to_type, row.to_inventory, row.plate)})`;
   }
+}
+
+function storageNode(type: string | null, inv: string | null, plate: string | null) {
+  if ((type === "glovebox" || type === "trunk") && normalizePlate(plate)) {
+    const label = type === "glovebox" ? "бардачок" : "багажник";
+    return (
+      <>
+        {label} <VehiclePlateLink plate={plate} />
+      </>
+    );
+  }
+  return <>{storageText(type, inv, plate)}</>;
 }
 
 function playerLink(citizenid: string | null, fallback: string) {
@@ -398,7 +424,11 @@ export default function InventoryGameLogsPage() {
                         </div>
                       </td>
                       <td className="auditNowrap">{itemText(row)}</td>
-                      <td className="auditJson">{storageText(row.from_type, row.from_inventory, row.plate)}{" -> "}{storageText(row.to_type, row.to_inventory, row.plate)}</td>
+                      <td className="auditJson">
+                        {storageNode(row.from_type, row.from_inventory, row.plate)}
+                        {" -> "}
+                        {storageNode(row.to_type, row.to_inventory, row.plate)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

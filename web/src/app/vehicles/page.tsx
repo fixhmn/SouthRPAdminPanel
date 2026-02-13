@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { AdminMe, api, can, fetchMe, roleLabel } from "@/lib/api";
 
@@ -22,27 +23,28 @@ type VehicleSearchRes = {
 };
 
 export default function VehiclesPage() {
+  const router = useRouter();
   const [me, setMe] = useState<AdminMe | null>(null);
   const [plate, setPlate] = useState("");
   const [data, setData] = useState<VehicleSearchRes | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    fetchMe().then(setMe).catch(() => setMe(null));
-  }, []);
-
-  async function runSearch() {
+  async function runSearch(plateOverride?: string, directOpenSingle = false) {
     setLoading(true);
     setErr("");
     setData(null);
     try {
-      const q = plate.trim();
+      const q = (plateOverride ?? plate).trim();
       if (!q) {
         setErr("Введите номер для поиска.");
         return;
       }
       const res = await api<VehicleSearchRes>(`/vehicles/search?plate=${encodeURIComponent(q)}`);
+      if (directOpenSingle && res.count === 1 && res.items?.[0]?.id) {
+        router.push(`/vehicles/${res.items[0].id}`);
+        return;
+      }
       setData(res);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -50,6 +52,19 @@ export default function VehiclesPage() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    fetchMe().then(setMe).catch(() => setMe(null));
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const prefill = (params.get("plate") || "").trim();
+    if (!prefill) return;
+    setPlate(prefill);
+    void runSearch(prefill, true);
+  }, []);
 
   return (
     <main className="container">
@@ -88,7 +103,7 @@ export default function VehiclesPage() {
                 placeholder="Номер или часть номера"
                 style={{ flex: 1 }}
               />
-              <button className="btn" onClick={runSearch} disabled={loading || !plate.trim()}>
+              <button className="btn" onClick={() => void runSearch()} disabled={loading || !plate.trim()}>
                 {loading ? "Поиск..." : "Найти"}
               </button>
             </div>
