@@ -621,17 +621,30 @@ async def _find_players_by_static_id(pool, static_id: int, limit: int) -> list[d
                 return []
 
             # Fallback 1: match players by own license/license2 tails.
-            await cur.execute(
-                f"""
-                SELECT p.*, s.static_id, s.discord_id
-                FROM players p
-                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
-                WHERE SUBSTRING_INDEX(p.license, ':', -1) = %s
-                   OR SUBSTRING_INDEX(COALESCE(p.license2, ''), ':', -1) = %s
-                LIMIT %s
-                """,
-                (tail, tail, max(limit, 50)),
-            )
+            try:
+                await cur.execute(
+                    f"""
+                    SELECT p.*, s.static_id, s.discord_id
+                    FROM players p
+                    LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                    WHERE SUBSTRING_INDEX(p.license, ':', -1) = %s
+                       OR SUBSTRING_INDEX(COALESCE(p.license2, ''), ':', -1) = %s
+                    LIMIT %s
+                    """,
+                    (tail, tail, max(limit, 50)),
+                )
+            except Exception:
+                # Some schemas do not have players.license2
+                await cur.execute(
+                    f"""
+                    SELECT p.*, s.static_id, s.discord_id
+                    FROM players p
+                    LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                    WHERE SUBSTRING_INDEX(p.license, ':', -1) = %s
+                    LIMIT %s
+                    """,
+                    (tail, max(limit, 50)),
+                )
             players = await cur.fetchall()
             if players:
                 await _enrich_rows_with_static_id_by_license_tails(pool, players)
