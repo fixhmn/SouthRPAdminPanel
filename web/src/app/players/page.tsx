@@ -21,7 +21,7 @@ type SearchRes = {
 };
 
 export default function Players() {
-  const [field, setField] = useState("fullname");
+  const [field, setField] = useState("static_id");
   const [q, setQ] = useState("");
   const [data, setData] = useState<SearchRes | null>(null);
   const [wlBulkMode, setWlBulkMode] = useState<"add" | "remove">("add");
@@ -137,6 +137,12 @@ export default function Players() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void run();
+              }
+            }}
             placeholder="Запрос"
             className="input"
             style={{ flex: 1 }}

@@ -20,6 +20,65 @@ local function extractDiscordId(src)
     return nil
 end
 
+local function extractLicenseCandidates(src)
+    local out = {}
+    local seen = {}
+    for _, ident in ipairs(GetPlayerIdentifiers(src)) do
+        if type(ident) == "string" and (ident:sub(1, 8) == "license:" or ident:sub(1, 9) == "license2:") then
+            if not seen[ident] then
+                out[#out + 1] = ident
+                seen[ident] = true
+            end
+        end
+    end
+    return out
+end
+
+local function licenseTail(ident)
+    if type(ident) ~= "string" then
+        return nil
+    end
+    local tail = ident:match("^[^:]+:(.+)$")
+    if type(tail) == "string" and tail ~= "" then
+        return tail
+    end
+    return nil
+end
+
+local function resolveStaticIdFromDbByLicense(licenseIdent)
+    if type(licenseIdent) ~= "string" or licenseIdent == "" then
+        return nil
+    end
+    local ok, row = pcall(function()
+        return MySQL and MySQL.single and MySQL.single.await
+            and MySQL.single.await("SELECT static_id FROM static_ids WHERE license = ? LIMIT 1", { licenseIdent })
+            or nil
+    end)
+    if ok and row and row.static_id then
+        return row.static_id
+    end
+    return nil
+end
+
+local function resolveStaticIdFromDbByTail(licenseIdent)
+    local tail = licenseTail(licenseIdent)
+    if not tail then
+        return nil
+    end
+    local ok, row = pcall(function()
+        return MySQL and MySQL.single and MySQL.single.await
+            and MySQL.single.await(
+                "SELECT static_id FROM static_ids WHERE SUBSTRING_INDEX(license, ':', -1) = ? LIMIT 1",
+                { tail }
+            )
+            or nil
+    end)
+    if ok and row and row.static_id then
+        return row.static_id
+    end
+    return nil
+end
+
 local function resolveStaticIdBySource(src)
     local staticId = nil
     local okA, valA = pcall(function()
@@ -42,6 +101,22 @@ local function resolveStaticIdBySource(src)
         end)
         if okC and valC then
             staticId = valC
+        end
+    end
+    if not staticId then
+        for _, ident in ipairs(extractLicenseCandidates(src)) do
+            staticId = resolveStaticIdFromDbByLicense(ident)
+            if staticId then
+                break
+            end
+        end
+    end
+    if not staticId then
+        for _, ident in ipairs(extractLicenseCandidates(src)) do
+            staticId = resolveStaticIdFromDbByTail(ident)
+            if staticId then
+                break
+            end
         end
     end
     return staticId
