@@ -19,6 +19,7 @@ KNOWN_PERMISSIONS = {
     "players.manage_slots",
     "players.delete_character",
     "players.game_interact",
+    "players.inventory_delete",
     "vehicles.read",
     "vehicles.edit",
     "actions.manage_templates",
@@ -28,7 +29,22 @@ KNOWN_PERMISSIONS = {
 }
 
 DEFAULT_ROLE_PERMISSIONS = {
-    "administrator": ["*"],
+    "megamozg": ["*"],
+    "administrator": [
+        "admins.manage",
+        "audit.read",
+        "players.read",
+        "players.edit_profile",
+        "players.manage_wl",
+        "players.manage_ban",
+        "players.manage_slots",
+        "players.delete_character",
+        "players.game_interact",
+        "players.inventory_delete",
+        "vehicles.read",
+        "vehicles.edit",
+        "actions.manage_templates",
+    ],
     "moderator": [
         "players.read",
         "players.edit_profile",
@@ -37,6 +53,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "players.manage_slots",
         "players.delete_character",
         "players.game_interact",
+        "players.inventory_delete",
         "vehicles.read",
         "vehicles.edit",
         "actions.manage_templates",
@@ -46,12 +63,13 @@ DEFAULT_ROLE_PERMISSIONS = {
 }
 
 ROLE_RENAME_MAP = {
+    "owner": "megamozg",
     "superadmin": "administrator",
     "admin": "moderator",
     "viewer": "helper",
 }
 
-ALLOWED_ROLES = {"administrator", "moderator", "helper"}
+ALLOWED_ROLES = {"megamozg", "administrator", "moderator", "helper"}
 
 
 @dataclass
@@ -117,7 +135,7 @@ async def ensure_rbac_schema() -> None:
                         "ALTER TABLE web_admins ADD COLUMN discord_id BIGINT NULL UNIQUE AFTER login"
                     )
 
-                # Normalize legacy role names to the 3-role model.
+                # Normalize legacy role names to current role model.
                 for old_role, new_role in ROLE_RENAME_MAP.items():
                     await cur.execute(
                         """
@@ -139,7 +157,7 @@ async def ensure_rbac_schema() -> None:
                                 (role_name, permission),
                             )
                 else:
-                    # Keep only the 3 supported roles and ensure defaults exist.
+                    # Keep only the supported roles and ensure defaults exist.
                     for role_name, permissions in DEFAULT_ROLE_PERMISSIONS.items():
                         for permission in permissions:
                             await cur.execute(
@@ -147,10 +165,10 @@ async def ensure_rbac_schema() -> None:
                                 (role_name, permission),
                             )
                     await cur.execute(
-                        "DELETE FROM web_role_permissions WHERE role_name NOT IN ('administrator', 'moderator', 'helper')"
+                        "DELETE FROM web_role_permissions WHERE role_name NOT IN ('megamozg', 'administrator', 'moderator', 'helper')"
                     )
                     await cur.execute(
-                        "UPDATE web_admins SET role_name = 'helper' WHERE role_name NOT IN ('administrator', 'moderator', 'helper')"
+                        "UPDATE web_admins SET role_name = 'helper' WHERE role_name NOT IN ('megamozg', 'administrator', 'moderator', 'helper')"
                     )
 
                 await cur.execute("SELECT COUNT(*) FROM web_admins")

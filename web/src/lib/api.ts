@@ -90,6 +90,7 @@ export function can(me: AdminMe | null, permission: string): boolean {
 
 export function roleLabel(roleName: string): string {
   const map: Record<string, string> = {
+    megamozg: "megamozg",
     administrator: "administrator",
     moderator: "moderator",
     helper: "helper",

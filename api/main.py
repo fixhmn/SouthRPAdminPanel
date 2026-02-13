@@ -45,6 +45,7 @@ DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "861905224469708821"))
 DISCORD_ROLE_HELPER = int(os.getenv("DISCORD_ROLE_HELPER", "862255288979030016"))
 DISCORD_ROLE_MODERATOR = int(os.getenv("DISCORD_ROLE_MODERATOR", "893230820326801490"))
 DISCORD_ROLE_ADMINISTRATOR = int(os.getenv("DISCORD_ROLE_ADMINISTRATOR", "861906053519900692"))
+DISCORD_ROLE_MEGAMOZG = int(os.getenv("DISCORD_ROLE_MEGAMOZG", "0"))
 
 WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:3000").rstrip("/")
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://127.0.0.1:30120/south_webbridge/execute").strip()
@@ -166,6 +167,12 @@ class KickBody(BaseModel):
     reason: str | None = Field(default=None, max_length=256)
 
 
+class InventoryRemoveBody(BaseModel):
+    slot: int | None = Field(default=None, ge=1)
+    item_name: str | None = Field(default=None, min_length=1, max_length=128)
+    plate: str | None = Field(default=None, min_length=1, max_length=32)
+
+
 def _charinfo_to_dict(charinfo):
     if isinstance(charinfo, str):
         try:
@@ -196,6 +203,24 @@ def _build_item_image_url(image_value: str | None) -> str | None:
     return f"{IMAGES_URL_PREFIX}/{filename}"
 
 
+def _item_display_label(item_row: dict[str, Any], fallback_label: str | None) -> str | None:
+    base = (fallback_label or "").strip()
+    item_name = str(item_row.get("name") or item_row.get("item") or "").strip().lower()
+    if item_name != "carkeys":
+        return base or fallback_label
+    metadata = item_row.get("metadata")
+    if isinstance(metadata, str):
+        metadata = _safe_json(metadata)
+    if not isinstance(metadata, dict):
+        return base or fallback_label
+    plate = str(metadata.get("plate") or "").strip()
+    if not plate:
+        return base or fallback_label
+    if base:
+        return f"{base} [{plate}]"
+    return f"carkeys [{plate}]"
+
+
 def _normalize_inventory_like(raw_value):
     parsed = raw_value
     if isinstance(raw_value, str):
@@ -210,6 +235,7 @@ def _normalize_inventory_like(raw_value):
 
         item_name = row.get("name") or row.get("item")
         resolved_label = row.get("label") or resolve_item_label(str(item_name) if item_name else None)
+        resolved_label = _item_display_label(row, str(resolved_label) if resolved_label else None)
         resolved_image = row.get("image") or resolve_item_image(str(item_name) if item_name else None)
 
         obj = dict(row)
@@ -894,6 +920,8 @@ async def _generate_unique_token(pool) -> str:
 
 def _role_from_discord_roles(role_ids: list[int]) -> str | None:
     role_set = set(role_ids)
+    if DISCORD_ROLE_MEGAMOZG and DISCORD_ROLE_MEGAMOZG in role_set:
+        return "megamozg"
     if DISCORD_ROLE_ADMINISTRATOR in role_set:
         return "administrator"
     if DISCORD_ROLE_MODERATOR in role_set:
@@ -960,14 +988,13 @@ async def auth_discord_callback(code: str | None = None, error: str | None = Non
                 if not role_name or not is_active:
                     return RedirectResponse(f"{WEB_BASE_URL}/?discord_error=no_allowed_role", status_code=302)
 
-                login = f"discord_{discord_id}"
                 await cur.execute(
                     """
                     UPDATE web_admins
-                    SET login=%s, token=%s, updated_at=%s
+                    SET token=%s, updated_at=%s
                     WHERE discord_id=%s
                     """,
-                    (login, auth_token, now, discord_id),
+                    (auth_token, now, discord_id),
                 )
 
         short_code = secrets.token_urlsafe(24)
@@ -1354,6 +1381,7 @@ async def player_get(
 
         item_name = row.get("name") or row.get("item")
         resolved_label = row.get("label") or resolve_item_label(str(item_name) if item_name else None)
+        resolved_label = _item_display_label(row, str(resolved_label) if resolved_label else None)
         resolved_image = row.get("image") or resolve_item_image(str(item_name) if item_name else None)
 
         item_obj = dict(row)
@@ -1851,6 +1879,81 @@ async def kick_player(
         {"reason": reason, "drop": drop_result},
     )
     return {"ok": True, "reason": reason, "drop": drop_result}
+
+
+@app.post("/players/{citizenid}/actions/remove-inventory-item")
+async def remove_inventory_item(
+    citizenid: str,
+    body: InventoryRemoveBody,
+    admin: AdminContext = Depends(require_permission("players.inventory_delete")),
+):
+    pool = await get_pool()
+    removed_item: dict[str, Any] | None = None
+    removed_index: int | None = None
+
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT inventory FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
+            row = await cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Player not found")
+
+            inventory_raw = row.get("inventory")
+            try:
+                inventory = json.loads(inventory_raw or "[]")
+            except Exception:
+                inventory = []
+            if not isinstance(inventory, list):
+                inventory = []
+
+            want_slot = body.slot
+            want_name = (body.item_name or "").strip().lower()
+            want_plate = (body.plate or "").strip().lower()
+
+            for idx, item in enumerate(inventory):
+                if not isinstance(item, dict):
+                    continue
+                item_slot = item.get("slot")
+                item_name = str(item.get("name") or item.get("item") or "").strip().lower()
+                metadata = item.get("metadata")
+                if isinstance(metadata, str):
+                    metadata = _safe_json(metadata)
+                plate = ""
+                if isinstance(metadata, dict):
+                    plate = str(metadata.get("plate") or "").strip().lower()
+
+                if want_slot is not None:
+                    try:
+                        if int(item_slot) != int(want_slot):
+                            continue
+                    except Exception:
+                        continue
+                if want_name and item_name != want_name:
+                    continue
+                if want_plate and plate != want_plate:
+                    continue
+
+                removed_item = item
+                removed_index = idx
+                break
+
+            if removed_index is None or removed_item is None:
+                raise HTTPException(404, "Inventory item not found")
+
+            inventory.pop(removed_index)
+            await cur.execute(
+                "UPDATE players SET inventory=%s WHERE citizenid=%s",
+                (json.dumps(inventory, ensure_ascii=False), citizenid),
+            )
+
+    await _audit(
+        pool,
+        admin.login,
+        "DELETE_INVENTORY_ITEM",
+        {"citizenid": citizenid},
+        {"removed_item": removed_item},
+    )
+    return {"ok": True, "removed_item": removed_item}
 
 
 @app.delete("/players/{citizenid}")

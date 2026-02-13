@@ -42,6 +42,8 @@ type InventoryItem = {
   resolved_image_url?: string;
   count?: number;
   amount?: number;
+  slot?: number;
+  metadata?: Record<string, unknown>;
 };
 
 type GameActionVariable = {
@@ -241,6 +243,31 @@ export default function PlayerPage() {
       });
       setKickReason("");
       await checkOnlineStatus(true);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeInventoryItem(item: InventoryItem) {
+    const itemName = codeFromItem(item);
+    const slot = Number(item.slot || 0);
+    const plate = String((item.metadata as Record<string, unknown> | undefined)?.plate || "");
+    const q = plate ? `Удалить ${itemName} [${plate}]?` : `Удалить ${itemName}?`;
+    if (!confirm(q)) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await api(`/players/${cid}/actions/remove-inventory-item`, {
+        method: "POST",
+        body: JSON.stringify({
+          slot: slot > 0 ? slot : undefined,
+          item_name: itemName || undefined,
+          plate: plate || undefined,
+        }),
+      });
+      await load();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1118,6 +1145,7 @@ export default function PlayerPage() {
                   <th>Иконка</th>
                   <th>Предмет</th>
                   <th>Кол-во</th>
+                  {can(me, "players.inventory_delete") && <th>Действие</th>}
                 </tr>
               </thead>
               <tbody>
@@ -1139,6 +1167,13 @@ export default function PlayerPage() {
                       {labelFromItem(item)} <span className="muted">({codeFromItem(item)})</span>
                     </td>
                     <td>{item.count ?? item.amount ?? 1}</td>
+                    {can(me, "players.inventory_delete") && (
+                      <td>
+                        <button className="btn danger" disabled={busy} onClick={() => void removeInventoryItem(item)}>
+                          Удалить
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
