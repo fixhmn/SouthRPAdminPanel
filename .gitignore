@@ -72,5 +72,6 @@ web/*.tsbuildinfo
 # Project runtime files
 # ------------------------------
 items-images/
+ox_inventory/
 *.sqlite
 *.db
