@@ -43,18 +43,17 @@ type InvLogsRes = {
 };
 
 const ACTION_LABELS: Record<string, string> = {
-  give_player: "Give to player",
-  drop_ground: "Drop to ground",
-  pickup_drop: "Pickup from drop",
-  put_glovebox: "Put to glovebox",
-  take_glovebox: "Take from glovebox",
-  put_trunk: "Put to trunk",
-  take_trunk: "Take from trunk",
-  trunk_to_glovebox: "Trunk -> glovebox",
-  glovebox_to_trunk: "Glovebox -> trunk",
-  stack: "Stack",
+  give_player: "Передача игроку",
+  drop_ground: "Выброс на землю",
+  pickup_drop: "Поднятие из дропа",
+  put_glovebox: "Положил в бардачок",
+  take_glovebox: "Взял из бардачка",
+  put_trunk: "Положил в багажник",
+  take_trunk: "Взял из багажника",
+  trunk_to_glovebox: "Багажник -> бардачок",
+  glovebox_to_trunk: "Бардачок -> багажник",
+  stack: "Объединение (stack)",
   swap: "Swap",
-  other: "Other",
 };
 
 function formatMoscowTime(raw: string): string {
@@ -76,13 +75,13 @@ function formatMoscowTime(raw: string): string {
 }
 
 function actorText(row: InvLogRow): string {
-  if (row.actor_name) return row.actor_name;
+  if (row.actor_name && row.actor_name.trim()) return row.actor_name;
   if (row.actor_source !== null && row.actor_source !== undefined) return `ID ${row.actor_source}`;
-  return "System";
+  return "Система";
 }
 
 function targetText(row: InvLogRow): string {
-  if (row.target_name) return row.target_name;
+  if (row.target_name && row.target_name.trim()) return row.target_name;
   if (row.target_source !== null && row.target_source !== undefined) return `ID ${row.target_source}`;
   return "-";
 }
@@ -93,11 +92,15 @@ function itemText(row: InvLogRow): string {
 }
 
 function storageText(type: string | null, inv: string | null, plate: string | null): string {
-  if (type === "glovebox") return `glovebox ${plate || inv || "-"}`;
-  if (type === "trunk") return `trunk ${plate || inv || "-"}`;
-  if (type === "drop") return `drop ${inv || "-"}`;
-  if (type === "player") return `player ${inv || "-"}`;
+  if (type === "glovebox") return `бардачок ${plate || inv || "-"}`;
+  if (type === "trunk") return `багажник ${plate || inv || "-"}`;
+  if (type === "drop") return `дроп ${inv || "-"}`;
+  if (type === "player") return `инвентарь игрока ${inv || "-"}`;
   return `${type || "?"} ${inv || "-"}`;
+}
+
+function actionLabel(row: InvLogRow): string {
+  return ACTION_LABELS[row.action_key] || `Перемещение ${row.from_type || "?"} -> ${row.to_type || "?"}`;
 }
 
 function messageText(row: InvLogRow): string {
@@ -108,23 +111,27 @@ function messageText(row: InvLogRow): string {
 
   switch (row.action_key) {
     case "drop_ground":
-      return `${actor} dropped ${item} to ground (${plateOrDrop})`;
+      return `${actor} выбросил ${item} на землю (${plateOrDrop})`;
     case "pickup_drop":
-      return `${actor} picked up ${item} from drop (${plateOrDrop})`;
+      return `${actor} поднял ${item} из дропа (${plateOrDrop})`;
     case "give_player":
-      return `${actor} gave ${item} to ${target}`;
+      return `${actor} передал ${item} игроку ${target}`;
     case "put_glovebox":
-      return `${actor} put ${item} to glovebox ${plateOrDrop}`;
+      return `${actor} положил ${item} в бардачок ${plateOrDrop}`;
     case "take_glovebox":
-      return `${actor} took ${item} from glovebox ${plateOrDrop}`;
+      return `${actor} достал ${item} из бардачка ${plateOrDrop}`;
     case "put_trunk":
-      return `${actor} put ${item} to trunk ${plateOrDrop}`;
+      return `${actor} положил ${item} в багажник ${plateOrDrop}`;
     case "take_trunk":
-      return `${actor} took ${item} from trunk ${plateOrDrop}`;
+      return `${actor} достал ${item} из багажника ${plateOrDrop}`;
     case "trunk_to_glovebox":
-      return `${actor} moved ${item} trunk -> glovebox ${plateOrDrop}`;
+      return `${actor} переместил ${item} из багажника в бардачок ${plateOrDrop}`;
     case "glovebox_to_trunk":
-      return `${actor} moved ${item} glovebox -> trunk ${plateOrDrop}`;
+      return `${actor} переместил ${item} из бардачка в багажник ${plateOrDrop}`;
+    case "stack":
+      return `${actor} объединил стаки: ${item}`;
+    case "swap":
+      return `${actor} поменял слоты/предметы: ${item}`;
     default:
       return `${actor}: ${item} (${storageText(row.from_type, row.from_inventory, row.plate)} -> ${storageText(row.to_type, row.to_inventory, row.plate)})`;
   }
@@ -153,10 +160,11 @@ export default function InventoryGameLogsPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [sort, setSort] = useState("date_desc");
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
-  async function load(nextOffset?: number) {
-    setBusy(true);
-    setErr("");
+  async function load(nextOffset?: number, silent = false) {
+    if (!silent) setBusy(true);
+    if (!silent) setErr("");
     try {
       const admin = await fetchMe();
       setMe(admin);
@@ -180,15 +188,25 @@ export default function InventoryGameLogsPage() {
       setData(res);
       setOffset(off);
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
+      if (!silent) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setBusy(false);
+      if (!silent) setBusy(false);
     }
   }
 
   useEffect(() => {
     void load(0);
   }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const timer = setInterval(() => {
+      void load(offset, true);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [autoRefresh, offset, limit, action, player, item, dateFrom, dateTo, sort]);
 
   const totalPages = useMemo(() => {
     if (!data) return 1;
@@ -200,25 +218,30 @@ export default function InventoryGameLogsPage() {
     return Math.floor(data.offset / data.limit) + 1;
   }, [data]);
 
+  const actionsForFilter = useMemo(
+    () => (data?.actions || []).filter((a) => a.action_key && a.action_key !== "other"),
+    [data]
+  );
+
   return (
     <main className="container">
       <header className="card" style={{ marginBottom: 14 }}>
         <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
           <div>
             <h1 className="title" style={{ marginBottom: 6 }}>
-              Game Logs: Inventory
+              Игровые логи: Инвентарь
             </h1>
-            <div className="muted">{me ? `You: ${me.login} (${roleLabel(me.role_name)})` : "Checking auth..."}</div>
+            <div className="muted">{me ? `Вы: ${me.login} (${roleLabel(me.role_name)})` : "Проверка авторизации..."}</div>
           </div>
           <div className="row" style={{ flexWrap: "wrap" }}>
             <Link className="btn secondary" href="/">
-              Home
+              Главная
             </Link>
             <Link className="btn secondary" href="/game-logs">
-              Log Sections
+              Разделы логов
             </Link>
             <Link className="btn secondary" href="/players">
-              Players
+              Игроки
             </Link>
           </div>
         </div>
@@ -228,18 +251,18 @@ export default function InventoryGameLogsPage() {
 
       {!can(me, "game_logs.inventory.read") ? (
         <section className="card">
-          <h3 style={{ marginTop: 0 }}>No access</h3>
-          <p className="muted">Permission `game_logs.inventory.read` is required.</p>
+          <h3 style={{ marginTop: 0 }}>Нет доступа</h3>
+          <p className="muted">Требуется permission `game_logs.inventory.read`.</p>
         </section>
       ) : (
         <>
           <section className="card">
             <div className="row" style={{ flexWrap: "wrap", alignItems: "end" }}>
               <div>
-                <label className="small" htmlFor="inv-action">Action</label>
+                <label className="small" htmlFor="inv-action">Действие</label>
                 <select id="inv-action" className="input" value={action} onChange={(e) => setAction(e.target.value)}>
-                  <option value="">All</option>
-                  {(data?.actions || []).map((a) => (
+                  <option value="">Все</option>
+                  {actionsForFilter.map((a) => (
                     <option key={a.action_key} value={a.action_key}>
                       {ACTION_LABELS[a.action_key] || a.action_key} ({a.count})
                     </option>
@@ -248,11 +271,11 @@ export default function InventoryGameLogsPage() {
               </div>
 
               <div>
-                <label className="small" htmlFor="inv-player">Player</label>
+                <label className="small" htmlFor="inv-player">Игрок</label>
                 <input
                   id="inv-player"
                   className="input"
-                  placeholder="Name / citizenid / static_id"
+                  placeholder="Имя / citizenid / static_id"
                   value={player}
                   onChange={(e) => setPlayer(e.target.value)}
                   onKeyDown={(e) => {
@@ -265,11 +288,11 @@ export default function InventoryGameLogsPage() {
               </div>
 
               <div>
-                <label className="small" htmlFor="inv-item">Item</label>
+                <label className="small" htmlFor="inv-item">Предмет</label>
                 <input
                   id="inv-item"
                   className="input"
-                  placeholder="item name / label"
+                  placeholder="item / label"
                   value={item}
                   onChange={(e) => setItem(e.target.value)}
                   onKeyDown={(e) => {
@@ -282,27 +305,27 @@ export default function InventoryGameLogsPage() {
               </div>
 
               <div>
-                <label className="small" htmlFor="inv-date-from">Date from (ISO)</label>
+                <label className="small" htmlFor="inv-date-from">Дата от (ISO)</label>
                 <input id="inv-date-from" className="input" placeholder="2026-02-13T00:00:00" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
               </div>
 
               <div>
-                <label className="small" htmlFor="inv-date-to">Date to (ISO)</label>
+                <label className="small" htmlFor="inv-date-to">Дата до (ISO)</label>
                 <input id="inv-date-to" className="input" placeholder="2026-02-13T23:59:59" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
               </div>
 
               <div>
-                <label className="small" htmlFor="inv-sort">Sort</label>
+                <label className="small" htmlFor="inv-sort">Сортировка</label>
                 <select id="inv-sort" className="input" value={sort} onChange={(e) => setSort(e.target.value)}>
-                  <option value="date_desc">Date (new first)</option>
-                  <option value="date_asc">Date (old first)</option>
-                  <option value="item_asc">Item (A-Z)</option>
-                  <option value="item_desc">Item (Z-A)</option>
+                  <option value="date_desc">Дата (сначала новые)</option>
+                  <option value="date_asc">Дата (сначала старые)</option>
+                  <option value="item_asc">Предмет (A-Z)</option>
+                  <option value="item_desc">Предмет (Z-A)</option>
                 </select>
               </div>
 
               <div>
-                <label className="small" htmlFor="inv-limit">Limit</label>
+                <label className="small" htmlFor="inv-limit">Лимит</label>
                 <select id="inv-limit" className="input" value={limit} onChange={(e) => setLimit(parseInt(e.target.value, 10))}>
                   <option value={50}>50</option>
                   <option value={100}>100</option>
@@ -312,26 +335,34 @@ export default function InventoryGameLogsPage() {
               </div>
 
               <button className="btn" onClick={() => void load(0)} disabled={busy}>
-                {busy ? "Loading..." : "Apply"}
+                {busy ? "Загрузка..." : "Применить"}
               </button>
+            </div>
+
+            <div className="row" style={{ marginTop: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
+              <label className="small" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+                Автообновление (каждые 5с)
+              </label>
+              <div className="small">{autoRefresh ? "Лента обновляется" : "Лента на паузе (скролл не дергается)"}</div>
             </div>
           </section>
 
           <section className="card" style={{ marginTop: 12 }}>
             <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", marginBottom: 8 }}>
               <div className="small">
-                Total: {data?.total ?? 0} | Page: {currentPage}/{totalPages}
+                Всего: {data?.total ?? 0} | Страница: {currentPage}/{totalPages}
               </div>
               <div className="row">
                 <button className="btn secondary" onClick={() => void load(Math.max(0, offset - limit))} disabled={busy || offset <= 0}>
-                  Prev
+                  Назад
                 </button>
                 <button
                   className="btn secondary"
                   onClick={() => void load(offset + limit)}
                   disabled={busy || !data || offset + limit >= data.total}
                 >
-                  Next
+                  Вперед
                 </button>
               </div>
             </div>
@@ -341,12 +372,12 @@ export default function InventoryGameLogsPage() {
                 <thead>
                   <tr>
                     <th className="auditNowrap">ID</th>
-                    <th className="auditNowrap">Time (MSK)</th>
-                    <th className="auditNowrap">Action</th>
-                    <th>Event</th>
-                    <th>Players</th>
-                    <th className="auditNowrap">Item</th>
-                    <th className="auditNowrap">From {"->"} To</th>
+                    <th className="auditNowrap">Время (МСК)</th>
+                    <th className="auditNowrap">Действие</th>
+                    <th>Событие</th>
+                    <th>Игроки</th>
+                    <th className="auditNowrap">Предмет</th>
+                    <th className="auditNowrap">Источник {"->"} Цель</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -354,15 +385,15 @@ export default function InventoryGameLogsPage() {
                     <tr key={row.id}>
                       <td className="auditNowrap">{row.id}</td>
                       <td className="auditNowrap">{formatMoscowTime(row.ts)}</td>
-                      <td className="auditNowrap">{ACTION_LABELS[row.action_key] || row.action_key}</td>
+                      <td className="auditNowrap">{actionLabel(row)}</td>
                       <td className="auditJson">{messageText(row)}</td>
                       <td className="auditJson">
                         <div>
-                          Actor: {playerLink(row.actor_citizenid, actorText(row))}
+                          Отправитель: {playerLink(row.actor_citizenid, actorText(row))}
                           {row.actor_static_id ? ` (static ${row.actor_static_id})` : ""}
                         </div>
                         <div>
-                          Target: {playerLink(row.target_citizenid, targetText(row))}
+                          Получатель: {playerLink(row.target_citizenid, targetText(row))}
                           {row.target_static_id ? ` (static ${row.target_static_id})` : ""}
                         </div>
                       </td>

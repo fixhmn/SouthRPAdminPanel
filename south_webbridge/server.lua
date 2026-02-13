@@ -194,11 +194,18 @@ local function resolvePlayerIdentity(src)
         return nil
     end
     local row = buildOnlinePlayerSnapshot(src) or {}
+    local charName = nil
+    if (row.firstname and tostring(row.firstname) ~= "") or (row.lastname and tostring(row.lastname) ~= "") then
+        charName = ((tostring(row.firstname or "")) .. " " .. (tostring(row.lastname or ""))):gsub("^%s+", ""):gsub("%s+$", "")
+        if charName == "" then
+            charName = nil
+        end
+    end
     return {
         source = src,
         citizenid = row.citizenid,
         static_id = row.static_id,
-        name = row.name or GetPlayerName(src),
+        name = charName or row.name or GetPlayerName(src),
     }
 end
 
@@ -266,13 +273,13 @@ local function classifyInventoryAction(payload)
     if action == "swap" then
         return "swap"
     end
-    return "other"
+    return nil
 end
 
 local function tryInsertInventoryLog(payload)
-    if not (MySQL and MySQL.insert and MySQL.insert.await) then
+    if not MySQL then
         if inventoryHookDebugCount < 5 then
-            print(("[^1%s^7] inventory log skipped: MySQL.insert.await unavailable"):format(RESOURCE_NAME))
+            print(("[^1%s^7] inventory log skipped: MySQL object unavailable"):format(RESOURCE_NAME))
             inventoryHookDebugCount = inventoryHookDebugCount + 1
         end
         return
@@ -281,6 +288,9 @@ local function tryInsertInventoryLog(payload)
     local fromInventory = tostring(payload.fromInventory or "")
     local toInventory = tostring(payload.toInventory or "")
     local actionKey = classifyInventoryAction(payload)
+    if not actionKey then
+        return
+    end
     local itemName, itemLabel, plateFromMeta = coalesceItemData(payload)
     local plate = plateFromMeta or extractPlateFromInventoryId(fromInventory) or extractPlateFromInventoryId(toInventory)
     local dropId = payload.dropId or (fromInventory:match("^drop[%w_%-]+$") and fromInventory) or (toInventory:match("^drop[%w_%-]+$") and toInventory)
@@ -301,40 +311,52 @@ local function tryInsertInventoryLog(payload)
         payloadJson = encoded
     end
 
+    local insertSql = [[
+        INSERT INTO web_game_inventory_logs (
+            ts, action_key,
+            item_name, item_label, item_count, plate, drop_id,
+            actor_source, actor_citizenid, actor_static_id, actor_name,
+            target_source, target_citizenid, target_static_id, target_name,
+            from_type, to_type, from_inventory, to_inventory, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]]
+    local insertParams = {
+        os.date("%Y-%m-%d %H:%M:%S"),
+        actionKey,
+        itemName and tostring(itemName) or nil,
+        itemLabel and tostring(itemLabel) or nil,
+        count,
+        plate and tostring(plate) or nil,
+        dropId and tostring(dropId) or nil,
+        actor and actor.source or nil,
+        actor and actor.citizenid or nil,
+        actor and actor.static_id or nil,
+        actor and actor.name or nil,
+        target and target.source or nil,
+        target and target.citizenid or nil,
+        target and target.static_id or nil,
+        target and target.name or nil,
+        payload.fromType and tostring(payload.fromType) or nil,
+        payload.toType and tostring(payload.toType) or nil,
+        fromInventory ~= "" and fromInventory or nil,
+        toInventory ~= "" and toInventory or nil,
+        payloadJson,
+    }
+
     local ok, err = pcall(function()
-        MySQL.insert.await(
-            [[
-                INSERT INTO web_game_inventory_logs (
-                    ts, action_key,
-                    item_name, item_label, item_count, plate, drop_id,
-                    actor_source, actor_citizenid, actor_static_id, actor_name,
-                    target_source, target_citizenid, target_static_id, target_name,
-                    from_type, to_type, from_inventory, to_inventory, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ]],
-            {
-                os.date("%Y-%m-%d %H:%M:%S"),
-                actionKey,
-                itemName and tostring(itemName) or nil,
-                itemLabel and tostring(itemLabel) or nil,
-                count,
-                plate and tostring(plate) or nil,
-                dropId and tostring(dropId) or nil,
-                actor and actor.source or nil,
-                actor and actor.citizenid or nil,
-                actor and actor.static_id or nil,
-                actor and actor.name or nil,
-                target and target.source or nil,
-                target and target.citizenid or nil,
-                target and target.static_id or nil,
-                target and target.name or nil,
-                payload.fromType and tostring(payload.fromType) or nil,
-                payload.toType and tostring(payload.toType) or nil,
-                fromInventory ~= "" and fromInventory or nil,
-                toInventory ~= "" and toInventory or nil,
-                payloadJson,
-            }
-        )
+        if MySQL.insert and MySQL.insert.await then
+            MySQL.insert.await(insertSql, insertParams)
+            return
+        end
+        if MySQL.update and MySQL.update.await then
+            MySQL.update.await(insertSql, insertParams)
+            return
+        end
+        if MySQL.query and MySQL.query.await then
+            MySQL.query.await(insertSql, insertParams)
+            return
+        end
+        error("No await-capable MySQL method found (insert/update/query)")
     end)
 
     if not ok then

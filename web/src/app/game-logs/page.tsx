@@ -17,20 +17,20 @@ export default function GameLogsPage() {
         <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
           <div>
             <h1 className="title" style={{ marginBottom: 6 }}>
-              Game Logs
+              Игровые логи
             </h1>
-            <div className="muted">{me ? `You: ${me.login} (${roleLabel(me.role_name)})` : "Checking auth..."}</div>
+            <div className="muted">{me ? `Вы: ${me.login} (${roleLabel(me.role_name)})` : "Проверка авторизации..."}</div>
           </div>
           <div className="row" style={{ flexWrap: "wrap" }}>
             <Link className="btn secondary" href="/">
-              Home
+              Главная
             </Link>
             <Link className="btn secondary" href="/players">
-              Players
+              Игроки
             </Link>
             {can(me, "audit.read") && (
               <Link className="btn secondary" href="/audit">
-                Audit
+                Журнал аудита
               </Link>
             )}
           </div>
@@ -39,11 +39,11 @@ export default function GameLogsPage() {
 
       <section className="grid">
         <article className="card">
-          <h3 style={{ marginTop: 0 }}>Inventory Logs</h3>
-          <p className="small">Transfers, drops, pickups, glovebox/trunk movements, and other inventory actions.</p>
+          <h3 style={{ marginTop: 0 }}>Логи инвентаря</h3>
+          <p className="small">Передача, выброс, поднятие, бардачок, багажник и другие перемещения предметов.</p>
           <div style={{ marginTop: 10 }}>
             <Link className="btn" href="/game-logs/inventory">
-              Open
+              Открыть
             </Link>
           </div>
         </article>
