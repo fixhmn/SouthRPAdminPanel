@@ -550,6 +550,47 @@ async def _drop_player_if_online(pool, citizenid: str, reason: str, admin: Admin
         }
 
 
+async def _drop_static_if_online(static_id: int, reason: str, admin: AdminContext) -> dict[str, Any]:
+    try:
+        status = _post_bridge_status({"player": {"static_id": static_id}})
+    except HTTPException as e:
+        return {
+            "attempted": False,
+            "dropped": False,
+            "online": None,
+            "source": None,
+            "error": str(e.detail),
+        }
+
+    source_id = status.get("source")
+    if not bool(status.get("online")) or source_id is None:
+        return {"attempted": False, "dropped": False, "online": False, "source": None}
+
+    payload = {
+        "template": {
+            "id": 0,
+            "name": "drop_player",
+            "action_type": "drop_player",
+            "action_name": "DropPlayer",
+        },
+        "player": {"static_id": static_id, "source": source_id, "targetId": source_id, "target_id": source_id},
+        "values": {"targetId": source_id, "reason": reason},
+        "args": [source_id, reason],
+        "requested_by": {"admin_id": admin.admin_id, "login": admin.login},
+    }
+    try:
+        bridge = _post_bridge_execute(payload)
+        return {"attempted": True, "dropped": True, "online": True, "source": source_id, "bridge": bridge}
+    except HTTPException as e:
+        return {
+            "attempted": True,
+            "dropped": False,
+            "online": True,
+            "source": source_id,
+            "error": str(e.detail),
+        }
+
+
 async def _audit(pool, admin_tag: str, action: str, target: dict, payload: dict | None = None):
     payload = payload or {}
     async with pool.acquire() as conn:
@@ -1182,6 +1223,141 @@ async def player_get(
         "vehicles": vehicles,
         "permissions": sorted(admin.permissions),
     }
+
+
+@app.get("/players/static/{static_id}")
+async def player_static_get(
+    static_id: int,
+    admin: AdminContext = Depends(require_permission("players.read")),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(
+                """
+                SELECT static_id, license, discord_id, whitelisted, ban, ban_until
+                FROM static_ids
+                WHERE static_id = %s
+                LIMIT 1
+                """,
+                (static_id,),
+            )
+            s = await cur.fetchone()
+            if not s:
+                raise HTTPException(404, "static_id not found")
+
+            await cur.execute(
+                f"""
+                SELECT p.citizenid, p.name, p.license, p.charinfo
+                FROM players p
+                WHERE SUBSTRING_INDEX(p.license, ':', -1) = SUBSTRING_INDEX(%s, ':', -1)
+                ORDER BY p.citizenid DESC
+                LIMIT 1
+                """,
+                (s.get("license"),),
+            )
+            p = await cur.fetchone()
+
+    linked_character = None
+    if p:
+        ci = _charinfo_to_dict(p.get("charinfo"))
+        linked_character = {
+            "citizenid": p.get("citizenid"),
+            "name": p.get("name"),
+            "license": p.get("license"),
+            "firstname": ci.get("firstname"),
+            "lastname": ci.get("lastname"),
+        }
+
+    return {
+        "static_id": int(s.get("static_id")),
+        "license": s.get("license"),
+        "discord_id": s.get("discord_id"),
+        "wl": bool(s.get("whitelisted") or 0),
+        "ban": bool(s.get("ban") or 0),
+        "ban_until": str(s.get("ban_until")) if s.get("ban_until") else None,
+        "linked_character": linked_character,
+    }
+
+
+@app.post("/players/static/{static_id}/actions/addwl")
+async def addwl_static(
+    static_id: int,
+    admin: AdminContext = Depends(require_permission("players.manage_wl")),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("UPDATE static_ids SET whitelisted=1 WHERE static_id=%s", (static_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "static_id not found")
+
+    await _audit(pool, admin.login, "ADD_WL", {"static_id": static_id})
+    return {"ok": True, "static_id": static_id}
+
+
+@app.post("/players/static/{static_id}/actions/removewl")
+async def removewl_static(
+    static_id: int,
+    admin: AdminContext = Depends(require_permission("players.manage_wl")),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("UPDATE static_ids SET whitelisted=0 WHERE static_id=%s", (static_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "static_id not found")
+
+    drop_result = await _drop_static_if_online(
+        static_id,
+        _kick_reason(None, "You have been removed from whitelist."),
+        admin,
+    )
+    await _audit(pool, admin.login, "REMOVE_WL", {"static_id": static_id}, {"drop": drop_result})
+    return {"ok": True, "static_id": static_id, "drop": drop_result}
+
+
+@app.post("/players/static/{static_id}/actions/banwl")
+async def banwl_static(
+    static_id: int,
+    days: int = Query(1, ge=1, le=3650),
+    admin: AdminContext = Depends(require_permission("players.manage_ban")),
+):
+    pool = await get_pool()
+    ban_until = (datetime.now(UTC) + timedelta(days=days)).replace(tzinfo=None)
+
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE static_ids SET ban=1, ban_until=%s WHERE static_id=%s",
+                (ban_until, static_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(404, "static_id not found")
+
+    drop_result = await _drop_static_if_online(
+        static_id,
+        _kick_reason(None, f"You have been banned from whitelist for {days} day(s)."),
+        admin,
+    )
+    await _audit(pool, admin.login, "BAN_WL", {"static_id": static_id}, {"days": days, "drop": drop_result})
+    return {"ok": True, "static_id": static_id, "days": days, "drop": drop_result}
+
+
+@app.post("/players/static/{static_id}/actions/unbanwl")
+async def unbanwl_static(
+    static_id: int,
+    admin: AdminContext = Depends(require_permission("players.manage_ban")),
+):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("UPDATE static_ids SET ban=0, ban_until=NULL WHERE static_id=%s", (static_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "static_id not found")
+
+    await _audit(pool, admin.login, "UNBAN_WL", {"static_id": static_id})
+    return {"ok": True, "static_id": static_id}
 
 
 @app.patch("/players/{citizenid}/profile")

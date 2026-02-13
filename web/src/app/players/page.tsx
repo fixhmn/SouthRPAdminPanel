@@ -196,6 +196,16 @@ export default function Players() {
       {data && (
         <section style={{ marginTop: 14 }}>
           <div className="muted">Найдено: {data.count}</div>
+          {data.count === 0 && field === "static_id" && /^\d+$/.test(q.trim()) && (
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="small" style={{ marginBottom: 8 }}>
+                Персонаж с этим static_id не найден. Можно открыть карточку static_id и управлять WL/Ban.
+              </div>
+              <Link className="btn" href={`/players/static/${encodeURIComponent(q.trim())}`}>
+                Открыть карточку static_id {q.trim()}
+              </Link>
+            </div>
+          )}
           <div className="grid" style={{ marginTop: 10 }}>
             {data.items.map((p) => (
               <article key={p.citizenid} className="card">
