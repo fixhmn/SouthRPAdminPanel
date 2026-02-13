@@ -1082,11 +1082,32 @@ async def player_get(
         item_obj["resolved_image_url"] = _build_item_image_url(str(resolved_image) if resolved_image else None)
         normalized_inventory.append(item_obj)
 
+    resolved_static_id = p.get("static_id")
+    if resolved_static_id is None:
+        try:
+            online_payload = _post_bridge_online_list({})
+            raw_online = online_payload.get("items")
+            if isinstance(raw_online, list):
+                for row in raw_online:
+                    if not isinstance(row, dict):
+                        continue
+                    if str(row.get("citizenid") or "").strip() != citizenid:
+                        continue
+                    static_val = row.get("static_id")
+                    if static_val is not None:
+                        try:
+                            resolved_static_id = int(static_val)
+                        except Exception:
+                            resolved_static_id = static_val
+                    break
+        except HTTPException:
+            pass
+
     return {
         "citizenid": p.get("citizenid"),
         "license": p.get("license"),
         "name": p.get("name"),
-        "static_id": p.get("static_id"),
+        "static_id": resolved_static_id,
         "discord_id": p.get("discord_id"),
         "slots_current": current_slots,
         "wl": bool(p.get("whitelisted") or 0),

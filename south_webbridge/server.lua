@@ -81,6 +81,31 @@ end
 
 local function resolveStaticIdBySource(src)
     local staticId = nil
+    local staticResource = exports["south_staticid"]
+
+    local function tryStaticExport(method)
+        if not staticResource or type(method) ~= "string" or method == "" then
+            return nil
+        end
+        local ok1, val1 = pcall(function()
+            local fn = staticResource[method]
+            if type(fn) == "function" then
+                return fn(staticResource, src)
+            end
+            return nil
+        end)
+        if ok1 and val1 then
+            return val1
+        end
+        local ok2, val2 = pcall(function()
+            return staticResource[method](src)
+        end)
+        if ok2 and val2 then
+            return val2
+        end
+        return nil
+    end
+
     local okA, valA = pcall(function()
         return exports["south_staticid"] and exports["south_staticid"]:getStaticIdFromServerId(src)
     end)
@@ -88,20 +113,13 @@ local function resolveStaticIdBySource(src)
         staticId = valA
     end
     if not staticId then
-        local okB, valB = pcall(function()
-            return exports["south_staticid"] and exports["south_staticid"]:getStaticFromPlayerId(src)
-        end)
-        if okB and valB then
-            staticId = valB
-        end
+        staticId = tryStaticExport("getStaticIdFromPlayerId")
     end
     if not staticId then
-        local okC, valC = pcall(function()
-            return exports["south_staticid"] and exports["south_staticid"]:getStaticIdFromPlayer(src)
-        end)
-        if okC and valC then
-            staticId = valC
-        end
+        staticId = tryStaticExport("getStaticFromPlayerId")
+    end
+    if not staticId then
+        staticId = tryStaticExport("getStaticIdFromPlayer")
     end
     if not staticId then
         for _, ident in ipairs(extractLicenseCandidates(src)) do
