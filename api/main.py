@@ -1673,6 +1673,151 @@ async def _resolve_static_id_by_license(pool, license_value: str | None) -> int 
             return int(r[0]) if r else None
 
 
+async def _resolve_static_id_by_citizenid(pool, citizenid: str) -> int | None:
+    async def _find_static_by_tails(tails: list[str]) -> int | None:
+        unique_tails = sorted({t for t in tails if t})
+        if not unique_tails:
+            return None
+        placeholders = ",".join(["%s"] * len(unique_tails))
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    f"""
+                    SELECT static_id
+                    FROM static_ids
+                    WHERE SUBSTRING_INDEX(license, ':', -1) IN ({placeholders})
+                    LIMIT 1
+                    """,
+                    tuple(unique_tails),
+                )
+                row = await cur.fetchone()
+                if not row or row.get("static_id") is None:
+                    return None
+                try:
+                    return int(row.get("static_id"))
+                except Exception:
+                    return None
+
+    # 1) Primary: resolve by DB join players -> static_ids using license tail.
+    player_row: dict[str, Any] | None = None
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            # Some schemas may not have players.userId; probe with fallback queries.
+            for sql in (
+                f"""
+                SELECT p.license, p.license2, p.userId AS user_id, s.static_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE p.citizenid = %s
+                LIMIT 1
+                """,
+                f"""
+                SELECT p.license, p.license2, p.userid AS user_id, s.static_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE p.citizenid = %s
+                LIMIT 1
+                """,
+                f"""
+                SELECT p.license, p.license2, s.static_id
+                FROM players p
+                LEFT JOIN static_ids s ON {JOIN_ON_LICENSE_TAIL}
+                WHERE p.citizenid = %s
+                LIMIT 1
+                """,
+            ):
+                try:
+                    await cur.execute(sql, (citizenid,))
+                    player_row = await cur.fetchone()
+                    break
+                except Exception:
+                    continue
+
+    if not player_row:
+        return None
+
+    static_val = player_row.get("static_id")
+    if static_val is not None:
+        try:
+            return int(static_val)
+        except Exception:
+            return None
+
+    # 2) Fallback by players.license / players.license2 tails.
+    sid = await _find_static_by_tails(
+        [
+            license_tail(player_row.get("license")),
+            license_tail(player_row.get("license2")),
+        ]
+    )
+    if sid is not None:
+        return sid
+
+    # 3) Fallback by users(userId).license/license2, same as card enrichment path.
+    user_id_raw = player_row.get("user_id")
+    user_id = None
+    try:
+        if user_id_raw not in (None, ""):
+            user_id = int(user_id_raw)
+    except Exception:
+        user_id = None
+
+    if user_id is not None:
+        user_row = None
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                for sql in (
+                    "SELECT license, license2 FROM users WHERE userId = %s LIMIT 1",
+                    "SELECT license, license2 FROM users WHERE userid = %s LIMIT 1",
+                ):
+                    try:
+                        await cur.execute(sql, (user_id,))
+                        user_row = await cur.fetchone()
+                        break
+                    except Exception:
+                        continue
+        if user_row:
+            sid = await _find_static_by_tails(
+                [
+                    license_tail(user_row.get("license")),
+                    license_tail(user_row.get("license2")),
+                ]
+            )
+            if sid is not None:
+                return sid
+
+    # 4) Fallback: bridge online snapshot may still know static_id for online character.
+    try:
+        online_payload = _post_bridge_online_list({})
+        items = online_payload.get("items")
+        if isinstance(items, list):
+            for row in items:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("citizenid") or "").strip() != citizenid:
+                    continue
+                static_val = row.get("static_id")
+                if static_val is None:
+                    continue
+                try:
+                    sid = int(static_val)
+                except Exception:
+                    continue
+
+                # Return only if static record exists in DB.
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("SELECT static_id FROM static_ids WHERE static_id=%s LIMIT 1", (sid,))
+                        exists = await cur.fetchone()
+                        if exists:
+                            return sid
+                break
+    except HTTPException:
+        pass
+
+    return None
+
+
 @app.post("/players/{citizenid}/actions/addwl")
 async def addwl(
     citizenid: str,
@@ -1681,11 +1826,11 @@ async def addwl(
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT license FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
+            await cur.execute("SELECT citizenid FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
             r = await cur.fetchone()
             if not r:
                 raise HTTPException(404, "Player not found")
-            sid = await _resolve_static_id_by_license(pool, r.get("license"))
+            sid = await _resolve_static_id_by_citizenid(pool, citizenid)
             if sid is None:
                 raise HTTPException(404, "static_id not found")
             await cur.execute("UPDATE static_ids SET whitelisted=1 WHERE static_id=%s", (sid,))
@@ -1766,11 +1911,11 @@ async def removewl(
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT license FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
+            await cur.execute("SELECT citizenid FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
             r = await cur.fetchone()
             if not r:
                 raise HTTPException(404, "Player not found")
-            sid = await _resolve_static_id_by_license(pool, r.get("license"))
+            sid = await _resolve_static_id_by_citizenid(pool, citizenid)
             if sid is None:
                 raise HTTPException(404, "static_id not found")
             await cur.execute("UPDATE static_ids SET whitelisted=0 WHERE static_id=%s", (sid,))
@@ -1802,11 +1947,11 @@ async def banwl(
 
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT license FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
+            await cur.execute("SELECT citizenid FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
             r = await cur.fetchone()
             if not r:
                 raise HTTPException(404, "Player not found")
-            sid = await _resolve_static_id_by_license(pool, r.get("license"))
+            sid = await _resolve_static_id_by_citizenid(pool, citizenid)
             if sid is None:
                 raise HTTPException(404, "static_id not found")
             await cur.execute(
@@ -1838,11 +1983,11 @@ async def unbanwl(
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
-            await cur.execute("SELECT license FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
+            await cur.execute("SELECT citizenid FROM players WHERE citizenid=%s LIMIT 1", (citizenid,))
             r = await cur.fetchone()
             if not r:
                 raise HTTPException(404, "Player not found")
-            sid = await _resolve_static_id_by_license(pool, r.get("license"))
+            sid = await _resolve_static_id_by_citizenid(pool, citizenid)
             if sid is None:
                 raise HTTPException(404, "static_id not found")
             await cur.execute("UPDATE static_ids SET ban=0, ban_until=NULL WHERE static_id=%s", (sid,))
