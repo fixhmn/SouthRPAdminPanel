@@ -219,6 +219,15 @@ export default function PlayerPage() {
     }
   }
 
+  function wlActionPath(action: "addwl" | "removewl" | "banwl" | "unbanwl", query = ""): string {
+    const sidRaw = player?.static_id;
+    const sid = typeof sidRaw === "number" ? sidRaw : Number(sidRaw || 0);
+    if (Number.isFinite(sid) && sid > 0) {
+      return `/players/static/${sid}/actions/${action}${query}`;
+    }
+    return `/players/${cid}/actions/${action}${query}`;
+  }
+
   async function del() {
     if (!confirm(`Удалить персонажа ${cid}?`)) return;
     setBusy(true);
@@ -635,13 +644,13 @@ export default function PlayerPage() {
                   )}
                   {can(me, "players.manage_wl") && (
                     <>
-                      <button disabled={busy} className="btn" onClick={() => act(`/players/${cid}/actions/addwl`)}>
+                      <button disabled={busy} className="btn" onClick={() => act(wlActionPath("addwl"))}>
                         Добавить WL
                       </button>
                       <button
                         disabled={busy}
                         className="btn secondary"
-                        onClick={() => act(`/players/${cid}/actions/removewl`)}
+                        onClick={() => act(wlActionPath("removewl"))}
                       >
                         Убрать WL
                       </button>
@@ -667,14 +676,14 @@ export default function PlayerPage() {
                     <button
                       disabled={busy}
                       className="btn"
-                      onClick={() => act(`/players/${cid}/actions/banwl?days=${banDays}`)}
+                      onClick={() => act(wlActionPath("banwl", `?days=${banDays}`))}
                     >
                       Выдать WL-бан
                     </button>
                     <button
                       disabled={busy}
                       className="btn secondary"
-                      onClick={() => act(`/players/${cid}/actions/unbanwl`)}
+                      onClick={() => act(wlActionPath("unbanwl"))}
                     >
                       Снять WL-бан
                     </button>
